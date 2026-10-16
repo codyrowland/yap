@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yap</title>
+</head>
+<body>
+  <h1>Yap</h1>
+  <label for="microphone">Microphone</label>
+  <select id="microphone"></select>
+  <label for="model">Local model file</label>
+  <input id="model" type="text" size="40">
+  <label for="shortcut">Hold-to-dictate key</label>
+  <select id="shortcut"><option>F8</option><option>F9</option><option>F10</option></select>
+  <p>Place the cursor in a text field, hold the key and speak. Release to insert the transcription.</p>
+  <p id="status" role="status">Loading microphones…</p>
+  <script>
+    const invoke = window.__TAURI__.core.invoke;
+    const microphone = document.getElementById('microphone');
+    const model = document.getElementById('model');
+    const shortcut = document.getElementById('shortcut');
+    const status = document.getElementById('status');
+
+    Promise.all([invoke('microphones'), invoke('current_settings')]).then(([devices, saved]) => {
+      for (const [index, name] of devices.entries()) {
+        const option = document.createElement('option');
+        option.value = index;
+        option.textContent = name;
+        microphone.add(option);
+      }
+      microphone.value = String(saved[0]);
+      model.value = saved[1] || '';
+      shortcut.value = saved[2];
+      status.textContent = devices.length ? 'Ready' : 'No microphones found';
+    }).catch(error => status.textContent = String(error));
+
+    let pendingConfigure = Promise.resolve();
+    function configure() {
+      const requested = {
+        index: Number(microphone.value), modelPath: model.value.trim() || null,
+        shortcut: shortcut.value
+      };
+      const operation = pendingConfigure.catch(() => {}).then(() => invoke('configure', requested));
+      pendingConfigure = operation;
+      return operation.then(() => {
+        if (pendingConfigure === operation) {
+          status.textContent = 'Settings saved';
+        }
+      }).catch(async error => {
+        if (pendingConfigure === operation) {
+          try {
+            const saved = await invoke('current_settings');
+            microphone.value = String(saved[0]);
+            model.value = saved[1] || '';
+            shortcut.value = saved[2];
+          } catch (_) {}
+          status.textContent = String(error);
+        }
+      });
+    }
+
+    for (const control of [microphone, model, shortcut]) {
+      control.onchange = configure;
+    }
+    window.__TAURI__.event.listen('dictation-preview', ({ payload }) => {
+      status.textContent = payload;
+    });
+  </script>
+</body>
+</html>
