@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome to Yap</title>
+  <link rel="stylesheet" href="classical.css">
+</head>
+<body>
+  <div class="onboarding">
+    <header class="topbar"><span class="brand-square"></span>Welcome to Yap</header>
+    <div class="onboarding-body">
+      <nav class="onboarding-nav" aria-label="Setup steps">
+        <h1>Yap</h1>
+        <button data-step="0" type="button">1 · Permissions</button>
+        <button data-step="1" type="button" disabled>2 · Engine</button>
+        <button data-step="2" type="button" disabled>3 · Set up engine</button>
+        <button data-step="3" type="button" disabled>4 · Talk keys</button>
+        <button data-step="4" type="button" disabled>5 · Try it</button>
+      </nav>
+      <main class="onboarding-content">
+        <div>
+          <section id="step-0">
+            <small>Step 1 of 5</small>
+            <h2>Two permissions</h2>
+            <p>Yap listens only while you dictate, then inserts text into the app you're using.</p>
+            <div class="row"><span>Microphone<br><small>To hear you while recording.</small></span><strong id="mic-state">Checking…</strong></div>
+            <div class="row"><span>Accessibility<br><small>Windows does not require a separate grant. Yap checks that UI Automation is available.</small></span><strong id="access-state">Checking…</strong></div>
+            <label for="microphone">Microphone</label>
+            <select id="microphone" class="input"></select>
+            <button id="check-permissions" type="button" class="btn btn-secondary">Check again</button>
+            <p id="permission-error" role="status"></p>
+          </section>
+          <section id="step-1" hidden>
+            <small>Step 2 of 5</small>
+            <h2>Where should speech be transcribed?</h2>
+            <p>You can change this any time in Settings.</p>
+            <label class="row"><span>On this computer<br><small>Private and offline after downloading a Whisper model.</small></span><input name="engine" type="radio" value="local" checked></label>
+            <label class="row"><span>OpenAI-compatible API<br><small>OpenAI or your own transcription server. Audio is sent to the URL you choose.</small></span><input name="engine" type="radio" value="openai-compatible"></label>
+          </section>
+          <section id="step-2" hidden>
+            <small>Step 3 of 5</small>
+            <div id="local-setup">
+              <h2>Download a model</h2>
+              <p>Select a model to run locally. More sizes are available in Settings → On-device.</p>
+              <div id="starter-models"></div>
+            </div>
+            <div id="remote-setup" hidden>
+              <h2>Connect a transcription server</h2>
+              <p>Enter an OpenAI-compatible transcription endpoint. API keys are kept in Windows Credential Manager, not in settings.</p>
+              <label for="endpoint">Transcription URL</label>
+              <input id="endpoint" class="input" type="url" placeholder="https://api.openai.com/v1/audio/transcriptions">
+              <label for="remote-model">Model</label>
+              <input id="remote-model" class="input" type="text" placeholder="whisper-1">
+              <label for="api-key">API key or auth token (optional)</label>
+              <input id="api-key" class="input" type="password" autocomplete="off">
+            </div>
+          </section>
+          <section id="step-3" hidden>
+            <small>Step 4 of 5</small>
+            <h2>Set your talk keys</h2>
+            <p>Press keys one at a time, then choose Save keys. Hold them together when dictating in other apps. Choose two different combinations.</p>
+            <label for="hold-key">Hold to talk</label>
+            <button id="hold-key" class="btn btn-secondary" type="button">Ctrl+Space</button>
+            <button id="save-hold-key-capture" class="btn" type="button" hidden>Save keys</button>
+            <button id="cancel-hold-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
+            <label for="toggle-key">Toggle dictation</label>
+            <button id="toggle-key" class="btn btn-secondary" type="button">Ctrl+Shift+Space</button>
+            <button id="save-toggle-key-capture" class="btn" type="button" hidden>Save keys</button>
+            <button id="cancel-toggle-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
+            <p>Press Esc to cancel a recording without inserting text.</p>
+          </section>
+          <section id="step-4" hidden>
+            <small>Step 5 of 5</small>
+            <h2>Try it</h2>
+            <p>Click the box, hold your talk key (<strong id="hold-label"></strong>), speak, then release. Yap will transcribe into this box. You can also hold the button below.</p>
+            <textarea id="practice" class="input" placeholder="Your words appear here" aria-label="Dictation practice"></textarea>
+            <button id="try-record" class="btn btn-secondary" type="button">Hold here to record</button>
+          </section>
+          <div id="message" role="status"></div>
+        </div>
+        <footer><button id="back" class="btn btn-secondary" type="button" hidden>Back</button><button id="next" class="btn" type="button">Continue</button></footer>
+      </main>
+    </div>
+  </div>
+  <script>
+    const invoke = window.__TAURI__.core.invoke;
+    const status = document.getElementById('message');
+    const microphone = document.getElementById('microphone');
+    const holdKey = document.getElementById('hold-key');
+    const toggleKey = document.getElementById('toggle-key');
+    const endpoint = document.getElementById('endpoint');
+    const remoteModel = document.getElementById('remote-model');
+    const apiKey = document.getElementById('api-key');
+    const next = document.getElementById('next');
+    let step = 0;
+    let reached = 0;
+    let permissions = null;
+    let models = [];
+    let selectedModel = 'large-v3-turbo';
+    let activeDownload = null;
+    let saved = null;
+    let trialStart = null;
+    let capturingKind = null;
+    let captureTimer = null;
+    let capturedModifiers = new Map();
+    let capturedKey = null;
+
+    function setKey(button, key) {
+      button.value = key;
+      button.textContent = key;
+    }
+
+    function capturedShortcut() {
+      const parts = ['Ctrl', 'Alt', 'Shift', 'Meta'].filter(key => capturedModifiers.has(key)).map(key => capturedModifiers.get(key));
+      if (capturedKey) parts.push(capturedKey);
+      return parts.join('+');
+    }
+
+    function updateCapturePreview() {
+      const button = capturingKind === 'hold' ? holdKey : toggleKey;
+      button.textContent = capturedShortcut() || 'Press keys one at a time…';
+      document.getElementById('save-hold-key-capture').hidden = capturingKind !== 'hold' || !capturedShortcut();
+      document.getElementById('save-toggle-key-capture').hidden = capturingKind !== 'toggle' || !capturedShortcut();
+      document.getElementById('cancel-hold-key-capture').hidden = capturingKind !== 'hold';
+      document.getElementById('cancel-toggle-key-capture').hidden = capturingKind !== 'toggle';
+    }
+
+    async function cancelCapture() {
+      if (!capturingKind) return;
+      const button = capturingKind === 'hold' ? holdKey : toggleKey;
+      capturingKind = null;
+      capturedModifiers.clear();
+      capturedKey = null;
+      clearTimeout(captureTimer);
+      button.textContent = button.value;
+      document.getElementById('save-hold-key-capture').hidden = true;
+      document.getElementById('save-toggle-key-capture').hidden = true;
+      document.getElementById('cancel-hold-key-capture').hidden = true;
+      document.getElementById('cancel-toggle-key-capture').hidden = true;
+      await invoke('cancel_key_capture');
+    }
+
+    function engine() {
+      return document.querySelector('[name="engine"]:checked').value;
+    }
+
+    function showStep(index) {
+      if (step === 3 && index !== step) cancelCapture().catch(error => status.textContent = String(error));
+      step = index;
+      for (let i = 0; i < 5; i++) {
+        document.getElementById(`step-${i}`).hidden = i !== step;
+        const nav = document.querySelector(`[data-step="${i}"]`);
+        nav.disabled = i > reached;
+        if (i === step) nav.setAttribute('aria-current', 'step');
+        else nav.removeAttribute('aria-current');
+      }
+      document.getElementById('back').hidden = step === 0;
+      next.textContent = step === 4 ? 'Finish' : 'Continue';
+      document.getElementById('local-setup').hidden = engine() !== 'local';
+      document.getElementById('remote-setup').hidden = engine() === 'local';
+      status.textContent = '';
+    }
+
+    async function checkPermissions() {
+      try {
+        permissions = await invoke('onboarding_permissions', { index: Number(microphone.value) });
+        document.getElementById('mic-state').textContent = permissions.microphone ? 'Ready' : 'Unavailable';
+        document.getElementById('access-state').textContent = permissions.accessibility ? 'Ready' : 'Unavailable';
+        document.getElementById('permission-error').textContent = permissions.microphoneError || (permissions.accessibility ? '' : 'Windows UI Automation could not start.');
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    }
+
+    function renderModels() {
+      const container = document.getElementById('starter-models');
+      container.replaceChildren();
+      for (const id of ['large-v3-turbo', 'base', 'tiny']) {
+        const item = models.find(model => model.id === id);
+        if (!item) continue;
+        const row = document.createElement('div');
+        row.className = 'row';
+        const choice = document.createElement('input');
+        choice.type = 'radio';
+        choice.name = 'starter';
+        choice.checked = selectedModel === id;
+        choice.onchange = () => { selectedModel = id; renderModels(); };
+        const label = document.createElement('span');
+        label.textContent = `Whisper ${id} · ${(item.bytes / 1e6).toFixed(0)} MB`;
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'btn btn-secondary';
+        if (activeDownload === id) {
+          action.textContent = 'Cancel';
+          action.onclick = () => invoke('cancel_model_download', { id }).catch(error => status.textContent = String(error));
+        } else if (item.path) {
+          action.textContent = 'Ready';
+          action.disabled = true;
+        } else {
+          action.textContent = 'Download';
+          action.disabled = !!activeDownload;
+          action.onclick = async () => {
+            selectedModel = id;
+            activeDownload = id;
+            renderModels();
+            try {
+              await invoke('download_model', { id });
+            } catch (error) {
+              activeDownload = null;
+              status.textContent = String(error);
+              renderModels();
+            }
+          };
+        }
+        row.append(choice, label, action);
+        container.append(row);
+      }
+    }
+
+    async function saveSettings() {
+      const selected = models.find(item => item.id === selectedModel);
+      const provider = engine();
+      if (provider === 'local' && !selected?.path) throw new Error('Download a model before continuing.');
+      if (provider !== 'local' && (!endpoint.value.trim() || !remoteModel.value.trim())) throw new Error('Enter a transcription URL and model.');
+      await invoke('configure', {
+        index: Number(microphone.value), modelPath: provider === 'local' ? selected.path : saved.modelPath,
+        shortcut: holdKey.value, toggleShortcut: toggleKey.value, provider,
+        endpoint: endpoint.value.trim(), remoteModel: remoteModel.value.trim(), apiKeyEnv: saved.apiKeyEnv
+      });
+      saved = await invoke('current_settings');
+      if (provider !== 'local' && apiKey.value) {
+        await invoke('update_remote_credential', { secret: apiKey.value });
+        apiKey.value = '';
+      }
+    }
+
+    Promise.all([invoke('microphones'), invoke('current_settings'), invoke('model_catalog')]).then(([devices, settings, catalog]) => {
+      saved = settings;
+      models = catalog;
+      const installed = models.find(item => item.path === settings.modelPath);
+      if (installed) selectedModel = installed.id;
+      for (const [index, name] of devices.entries()) {
+        const option = document.createElement('option');
+        option.value = index;
+        option.textContent = name;
+        microphone.add(option);
+      }
+      microphone.value = String(settings.index);
+      if (settings.provider === 'openai-compatible') document.querySelector('[value="openai-compatible"]').checked = true;
+      endpoint.value = settings.endpoint;
+      remoteModel.value = settings.remoteModel;
+      setKey(holdKey, settings.shortcut);
+      setKey(toggleKey, settings.toggleShortcut);
+      document.getElementById('hold-label').textContent = settings.shortcut;
+      renderModels();
+      showStep(0);
+      checkPermissions();
+    }).catch(error => status.textContent = String(error));
+
+    for (const [kind, button] of [['hold', holdKey], ['toggle', toggleKey]]) {
+      button.onclick = async () => {
+        try {
+          await cancelCapture();
+          capturingKind = kind;
+          capturedModifiers.clear();
+          capturedKey = null;
+          updateCapturePreview();
+          await invoke('begin_key_capture', { kind });
+          if (capturingKind === kind) captureTimer = setTimeout(() => cancelCapture().catch(error => status.textContent = String(error)), 58000);
+        } catch (error) {
+          await cancelCapture().catch(() => {});
+          status.textContent = String(error);
+        }
+      };
+    }
+    for (const kind of ['hold', 'toggle']) {
+      document.getElementById(`cancel-${kind}-key-capture`).onclick = () => cancelCapture().catch(error => status.textContent = String(error));
+    }
+    async function saveCapturedKeys() {
+      if (!capturingKind) return;
+      const kind = capturingKind;
+      const key = capturedShortcut();
+      try {
+        await invoke('complete_key_capture', { kind, shortcut: key });
+        const button = kind === 'hold' ? holdKey : toggleKey;
+        capturingKind = null;
+        clearTimeout(captureTimer);
+        capturedModifiers.clear();
+        capturedKey = null;
+        document.getElementById('save-hold-key-capture').hidden = true;
+        document.getElementById('save-toggle-key-capture').hidden = true;
+        document.getElementById('cancel-hold-key-capture').hidden = true;
+        document.getElementById('cancel-toggle-key-capture').hidden = true;
+        setKey(button, key);
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    }
+    document.getElementById('save-hold-key-capture').onclick = saveCapturedKeys;
+    document.getElementById('save-toggle-key-capture').onclick = saveCapturedKeys;
+    const modifierName = event => ({ Control: 'Ctrl', Alt: 'Alt', Shift: 'Shift', Meta: 'Meta' })[event.key];
+    function browserKey(event) {
+      const code = event.code;
+      if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+      if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+      if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code) || /^Numpad[0-9]$/.test(code)) return code;
+      const names = { Space: 'Space', Tab: 'Tab', Enter: 'Enter', Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', ArrowLeft: 'Left', ArrowUp: 'Up', ArrowRight: 'Right', ArrowDown: 'Down', Semicolon: 'Semicolon', Equal: 'Equals', Comma: 'Comma', Minus: 'Minus', Period: 'Period', Slash: 'Slash', Backquote: 'Backtick', BracketLeft: 'LeftBracket', Backslash: 'Backslash', BracketRight: 'RightBracket', Quote: 'Quote' };
+      return names[code] || null;
+    }
+    function captureBrowserKey(event) {
+      if (!capturingKind) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type !== 'keydown' || event.repeat) return;
+      if (event.key === 'Escape') {
+        cancelCapture().catch(error => status.textContent = String(error));
+        return;
+      }
+      const modifier = modifierName(event);
+      if (modifier) {
+        capturedModifiers.set(modifier, (event.location === 2 ? 'Right ' : '') + modifier);
+        updateCapturePreview();
+        return;
+      }
+      const key = browserKey(event);
+      if (!key) {
+        status.textContent = 'This key is not supported';
+        return;
+      }
+      if (capturedKey && capturedKey !== key) {
+        status.textContent = 'A combination can have only one non-modifier key. Cancel and try again.';
+        return;
+      }
+      for (const [name, pressed] of [['Ctrl', event.ctrlKey], ['Alt', event.altKey], ['Shift', event.shiftKey], ['Meta', event.metaKey]]) {
+        if (pressed && !capturedModifiers.has(name)) capturedModifiers.set(name, name);
+      }
+      capturedKey = key;
+      updateCapturePreview();
+    }
+    window.addEventListener('keydown', captureBrowserKey, true);
+    window.addEventListener('keyup', captureBrowserKey, true);
+    window.addEventListener('pagehide', () => invoke('cancel_key_capture').catch(() => {}));
+    document.getElementById('check-permissions').onclick = checkPermissions;
+    microphone.onchange = checkPermissions;
+    for (const choice of document.querySelectorAll('[name="engine"]')) {
+      choice.onchange = () => showStep(step);
+    }
+    for (const nav of document.querySelectorAll('[data-step]')) {
+      nav.onclick = () => showStep(Number(nav.dataset.step));
+    }
+    document.getElementById('back').onclick = () => showStep(step - 1);
+    next.onclick = async () => {
+      next.disabled = true;
+      try {
+        if (step === 0 && (!permissions?.microphone || !permissions?.accessibility)) throw new Error('Check both permissions before continuing.');
+        if (step === 2 || step === 3) await saveSettings();
+        if (step === 3) document.getElementById('hold-label').textContent = holdKey.value;
+        if (step === 3 && holdKey.value === toggleKey.value) throw new Error('Talk keys must be different.');
+        if (step === 4) {
+          await saveSettings();
+          await invoke('complete_onboarding');
+          location.replace('index.html');
+          return;
+        }
+        reached = Math.max(reached, step + 1);
+        showStep(step + 1);
+      } catch (error) {
+        status.textContent = String(error);
+      } finally {
+        next.disabled = false;
+      }
+    };
+    window.__TAURI__.event.listen('model-download-progress', async ({ payload }) => {
+      if (payload.state === 'downloading') {
+        status.textContent = `Downloading ${payload.id}: ${Math.floor(payload.downloaded * 100 / payload.total)}%`;
+      } else {
+        activeDownload = null;
+        status.textContent = payload.error || `${payload.id}: ${payload.state}`;
+        try {
+          models = await invoke('model_catalog');
+          renderModels();
+        } catch (error) {
+          status.textContent = String(error);
+        }
+      }
+    });
+    const practiceBox = document.getElementById('practice');
+    practiceBox.onfocus = () => invoke('trial_focus', { enabled: true }).catch(error => status.textContent = String(error));
+    practiceBox.onblur = () => invoke('trial_focus', { enabled: false }).catch(error => status.textContent = String(error));
+    window.__TAURI__.event.listen('onboarding-listening', () => status.textContent = 'Listening…');
+    window.__TAURI__.event.listen('onboarding-transcript', ({ payload }) => {
+      practiceBox.value += (practiceBox.value && !practiceBox.value.endsWith(' ') ? ' ' : '') + payload;
+      status.textContent = 'Transcribed from your microphone.';
+    });
+    window.__TAURI__.event.listen('dictation-preview', ({ payload }) => { status.textContent = payload; });
+    const record = document.getElementById('try-record');
+    record.onpointerdown = event => {
+      event.preventDefault();
+      record.setPointerCapture(event.pointerId);
+      status.textContent = 'Starting microphone…';
+      trialStart = invoke('trial_start');
+      trialStart.then(() => status.textContent = 'Listening…').catch(error => status.textContent = String(error));
+    };
+    record.onpointerup = async () => {
+      if (!trialStart) return;
+      const started = trialStart;
+      trialStart = null;
+      try {
+        const id = await started;
+        status.textContent = 'Transcribing…';
+        const text = await invoke('trial_end', { id });
+        practiceBox.value += (practiceBox.value && !practiceBox.value.endsWith(' ') ? ' ' : '') + text;
+        status.textContent = 'Transcribed from your microphone.';
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    };
+    record.onpointercancel = record.onpointerup;
+  </script>
+</body>
+</html>

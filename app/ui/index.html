@@ -3,66 +3,424 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Yap</title>
+  <title>Yap Settings</title>
+  <link rel="stylesheet" href="classical.css">
 </head>
 <body>
-  <h1>Yap</h1>
-  <label for="microphone">Microphone</label>
-  <select id="microphone"></select>
-  <label for="model">Local model file</label>
-  <input id="model" type="text" size="40">
-  <label for="shortcut">Hold-to-dictate key</label>
-  <select id="shortcut"><option>F8</option><option>F9</option><option>F10</option></select>
-  <p>Place the cursor in a text field, hold the key and speak. Release to insert the transcription.</p>
-  <p id="status" role="status">Loading microphones…</p>
+  <div class="settings">
+    <header class="topbar"><span class="brand-square"></span>Yap Settings <a href="history.html">History</a></header>
+    <div class="settings-body">
+      <nav class="settings-nav" aria-label="Settings">
+        <small>Input</small>
+        <button type="button" data-tab="talk">Talk keys</button>
+        <button type="button" data-tab="general">General</button>
+        <small>Transcription engine</small>
+        <button type="button" data-tab="local">On-device</button>
+        <button type="button" data-tab="remote">OpenAI-compatible</button>
+        <div class="settings-active"><small>Transcribing with</small><strong id="active-engine"></strong><span id="active-model"></span></div>
+      </nav>
+      <main class="settings-panel">
+        <section id="talk-settings" hidden>
+          <h2>Talk keys</h2>
+          <p>Work in any app. Text is inserted wherever your cursor is.</p>
+          <label for="shortcut">Hold to talk</label>
+          <button id="shortcut" class="btn btn-secondary" type="button">Ctrl+Space</button>
+          <button id="save-hold-key-capture" class="btn" type="button" hidden>Save keys</button>
+          <button id="cancel-hold-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
+          <p>Hold, speak, release to insert. To change a key, press the keys one at a time, then choose Save keys.</p>
+          <label for="toggle-shortcut">Toggle dictation</label>
+          <button id="toggle-shortcut" class="btn btn-secondary" type="button">Ctrl+Shift+Space</button>
+          <button id="save-toggle-key-capture" class="btn" type="button" hidden>Save keys</button>
+          <button id="cancel-toggle-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
+          <p>Press once to start, again to stop. Esc discards the audio without inserting text.</p>
+          <button id="reset-keys" type="button" class="btn btn-secondary">Reset to Ctrl Space / Ctrl Shift Space</button>
+        </section>
+        <section id="general-settings" hidden>
+          <h2>General</h2>
+          <p>How Yap behaves across your system.</p>
+          <label for="microphone">Microphone</label>
+          <select id="microphone" class="input"></select>
+        </section>
+        <section id="local-settings" hidden>
+          <h2>On-device models</h2>
+          <p>Audio never leaves this computer. Works offline.</p>
+          <button id="use-local" type="button" class="btn">Use on-device</button>
+          <label for="model">Local model file</label>
+          <input id="model" class="input" type="text">
+          <h2>Whisper</h2>
+          <div id="model-catalog"></div>
+          <span id="model-storage"></span>
+          <button id="open-models-folder" type="button" class="btn btn-secondary">Open models folder</button>
+        </section>
+        <section id="remote-settings" hidden>
+          <h2>OpenAI-compatible transcription</h2>
+          <p>Send audio to OpenAI or a transcription server you run. An unencrypted HTTP server can expose audio and its auth token on your network.</p>
+          <button id="use-remote" type="button" class="btn">Use this server</button>
+          <label for="endpoint">Transcription URL</label>
+          <input id="endpoint" class="input" type="url" placeholder="https://api.openai.com/v1/audio/transcriptions">
+          <label for="remote-model">Model</label>
+          <input id="remote-model" class="input" type="text" placeholder="whisper-1">
+          <label for="api-key">API key or auth token (optional)</label>
+          <input id="api-key" class="input" type="password" autocomplete="off">
+          <button id="save-key" type="button" class="btn">Save credential</button>
+          <button id="remove-key" type="button" class="btn btn-secondary">Remove credential</button>
+          <span id="key-status" role="status"></span>
+        </section>
+        <select id="provider" hidden><option value="local">Local</option><option value="openai-compatible">OpenAI-compatible</option></select>
+        <div id="status" role="status">Loading settings…</div>
+      </main>
+    </div>
+  </div>
   <script>
     const invoke = window.__TAURI__.core.invoke;
     const microphone = document.getElementById('microphone');
     const model = document.getElementById('model');
+    const modelCatalog = document.getElementById('model-catalog');
+    const provider = document.getElementById('provider');
+    const endpoint = document.getElementById('endpoint');
+    const remoteModel = document.getElementById('remote-model');
+    const apiKey = document.getElementById('api-key');
+    const keyStatus = document.getElementById('key-status');
     const shortcut = document.getElementById('shortcut');
+    const toggleShortcut = document.getElementById('toggle-shortcut');
     const status = document.getElementById('status');
+    let activeDownload = null;
+    let legacyKeyEnv = null;
+    let capturingKind = null;
+    let captureTimer = null;
+    let capturedModifiers = new Map();
+    let capturedKey = null;
 
-    Promise.all([invoke('microphones'), invoke('current_settings')]).then(([devices, saved]) => {
+    function setKey(button, key) {
+      button.value = key;
+      button.textContent = key;
+    }
+
+    function capturedShortcut() {
+      const parts = ['Ctrl', 'Alt', 'Shift', 'Meta'].filter(key => capturedModifiers.has(key)).map(key => capturedModifiers.get(key));
+      if (capturedKey) parts.push(capturedKey);
+      return parts.join('+');
+    }
+
+    function updateCapturePreview() {
+      const button = capturingKind === 'hold' ? shortcut : toggleShortcut;
+      button.textContent = capturedShortcut() || 'Press keys one at a time…';
+      document.getElementById('save-hold-key-capture').hidden = capturingKind !== 'hold' || !capturedShortcut();
+      document.getElementById('save-toggle-key-capture').hidden = capturingKind !== 'toggle' || !capturedShortcut();
+      document.getElementById('cancel-hold-key-capture').hidden = capturingKind !== 'hold';
+      document.getElementById('cancel-toggle-key-capture').hidden = capturingKind !== 'toggle';
+    }
+
+    async function cancelCapture() {
+      if (!capturingKind) return;
+      const button = capturingKind === 'hold' ? shortcut : toggleShortcut;
+      capturingKind = null;
+      capturedModifiers.clear();
+      capturedKey = null;
+      clearTimeout(captureTimer);
+      button.textContent = button.value;
+      document.getElementById('save-hold-key-capture').hidden = true;
+      document.getElementById('save-toggle-key-capture').hidden = true;
+      document.getElementById('cancel-hold-key-capture').hidden = true;
+      document.getElementById('cancel-toggle-key-capture').hidden = true;
+      await invoke('cancel_key_capture');
+    }
+
+    function showPanel(tab) {
+      for (const item of ['talk', 'general', 'local', 'remote']) {
+        document.getElementById(`${item}-settings`).hidden = item !== tab;
+        const nav = document.querySelector(`[data-tab="${item}"]`);
+        if (item === tab) nav.setAttribute('aria-current', 'page');
+        else nav.removeAttribute('aria-current');
+      }
+    }
+
+    function updateProvider() {
+      const local = provider.value === 'local';
+      document.getElementById('active-engine').textContent = local ? 'On-device' : 'OpenAI-compatible';
+      document.getElementById('active-model').textContent = local ? model.value.split(/[\\/]/).pop() : remoteModel.value;
+      document.getElementById('use-local').hidden = local;
+      document.getElementById('use-remote').hidden = !local;
+    }
+
+    async function refreshModels() {
+      try {
+        const models = await invoke('model_catalog');
+        modelCatalog.replaceChildren();
+        const used = models.reduce((sum, item) => sum + (item.path ? item.bytes : 0), 0);
+        document.getElementById('model-storage').textContent = `${(used / 1e9).toFixed(1)} GB used by downloaded models`;
+        for (const item of models) {
+          const row = document.createElement('div');
+          row.className = 'row';
+          const label = document.createElement('span');
+          label.textContent = `${item.id} · ${(item.bytes / 1e6).toFixed(0)} MB`;
+          const action = document.createElement('button');
+          action.type = 'button';
+          action.className = 'btn btn-secondary';
+          if (activeDownload === item.id) {
+            action.textContent = 'Cancel';
+            action.onclick = () => invoke('cancel_model_download', { id: item.id }).catch(error => status.textContent = String(error));
+          } else if (item.path) {
+            action.textContent = model.value === item.path ? 'In use' : 'Use model';
+            action.disabled = model.value === item.path;
+            action.onclick = () => {
+              model.value = item.path;
+              provider.value = 'local';
+              updateProvider();
+              configure().then(refreshModels);
+            };
+          } else {
+            action.textContent = 'Download';
+            action.disabled = !!activeDownload;
+            action.onclick = async () => {
+              activeDownload = item.id;
+              try {
+                await invoke('download_model', { id: item.id });
+              } catch (error) {
+                activeDownload = null;
+                status.textContent = String(error);
+              }
+              await refreshModels();
+            };
+          }
+          row.append(label, action);
+          modelCatalog.append(row);
+        }
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    }
+
+    async function refreshCredentialStatus() {
+      if (!endpoint.value.trim()) {
+        keyStatus.textContent = 'Enter a server URL first';
+        return;
+      }
+      const selectedEndpoint = endpoint.value.trim();
+      try {
+        const present = await invoke('remote_credential_status');
+        if (selectedEndpoint === endpoint.value.trim()) {
+          keyStatus.textContent = present ? 'Credential saved in Windows Credential Manager' : 'No credential saved';
+        }
+      } catch (error) {
+        keyStatus.textContent = String(error);
+      }
+    }
+
+    invoke('onboarding_needed').then(needed => {
+      if (needed) {
+        location.replace('onboarding.html');
+        return null;
+      }
+      return Promise.all([invoke('microphones'), invoke('current_settings')]);
+    }).then(result => {
+      if (!result) return;
+      const [devices, saved] = result;
       for (const [index, name] of devices.entries()) {
         const option = document.createElement('option');
         option.value = index;
         option.textContent = name;
         microphone.add(option);
       }
-      microphone.value = String(saved[0]);
-      model.value = saved[1] || '';
-      shortcut.value = saved[2];
+      microphone.value = String(saved.index);
+      model.value = saved.modelPath || '';
+      setKey(shortcut, saved.shortcut);
+      setKey(toggleShortcut, saved.toggleShortcut);
+      provider.value = saved.provider;
+      endpoint.value = saved.endpoint;
+      remoteModel.value = saved.remoteModel;
+      legacyKeyEnv = saved.apiKeyEnv;
+      updateProvider();
+      showPanel(saved.provider === 'local' ? 'local' : 'remote');
+      if (saved.provider === 'openai-compatible') refreshCredentialStatus();
       status.textContent = devices.length ? 'Ready' : 'No microphones found';
+      refreshModels();
     }).catch(error => status.textContent = String(error));
 
     let pendingConfigure = Promise.resolve();
     function configure() {
       const requested = {
         index: Number(microphone.value), modelPath: model.value.trim() || null,
-        shortcut: shortcut.value
+        shortcut: shortcut.value, toggleShortcut: toggleShortcut.value,
+        provider: provider.value, endpoint: endpoint.value.trim(),
+        remoteModel: remoteModel.value.trim(), apiKeyEnv: legacyKeyEnv
       };
       const operation = pendingConfigure.catch(() => {}).then(() => invoke('configure', requested));
       pendingConfigure = operation;
       return operation.then(() => {
         if (pendingConfigure === operation) {
           status.textContent = 'Settings saved';
+          updateProvider();
+          if (provider.value === 'openai-compatible') refreshCredentialStatus();
         }
+        return true;
       }).catch(async error => {
         if (pendingConfigure === operation) {
           try {
             const saved = await invoke('current_settings');
-            microphone.value = String(saved[0]);
-            model.value = saved[1] || '';
-            shortcut.value = saved[2];
+            microphone.value = String(saved.index);
+            model.value = saved.modelPath || '';
+            setKey(shortcut, saved.shortcut);
+            setKey(toggleShortcut, saved.toggleShortcut);
+            provider.value = saved.provider;
+            endpoint.value = saved.endpoint;
+            remoteModel.value = saved.remoteModel;
+            legacyKeyEnv = saved.apiKeyEnv;
+            updateProvider();
+            if (provider.value === 'openai-compatible') refreshCredentialStatus();
           } catch (_) {}
           status.textContent = String(error);
         }
+        return false;
       });
     }
 
-    for (const control of [microphone, model, shortcut]) {
-      control.onchange = configure;
+    for (const nav of document.querySelectorAll('[data-tab]')) {
+      nav.onclick = () => {
+        cancelCapture().catch(error => status.textContent = String(error));
+        showPanel(nav.dataset.tab);
+      };
     }
+    for (const control of [microphone, model, endpoint, remoteModel]) {
+      control.onchange = () => { updateProvider(); configure(); };
+    }
+    for (const [kind, button] of [['hold', shortcut], ['toggle', toggleShortcut]]) {
+      button.onclick = async () => {
+        try {
+          await cancelCapture();
+          capturingKind = kind;
+          capturedModifiers.clear();
+          capturedKey = null;
+          updateCapturePreview();
+          await invoke('begin_key_capture', { kind });
+          if (capturingKind === kind) captureTimer = setTimeout(() => cancelCapture().catch(error => status.textContent = String(error)), 58000);
+        } catch (error) {
+          await cancelCapture().catch(() => {});
+          status.textContent = String(error);
+        }
+      };
+    }
+    for (const kind of ['hold', 'toggle']) {
+      document.getElementById(`cancel-${kind}-key-capture`).onclick = () => cancelCapture().catch(error => status.textContent = String(error));
+    }
+    async function saveCapturedKeys() {
+      if (!capturingKind) return;
+      const kind = capturingKind;
+      const key = capturedShortcut();
+      try {
+        await invoke('complete_key_capture', { kind, shortcut: key });
+        const button = kind === 'hold' ? shortcut : toggleShortcut;
+        capturingKind = null;
+        clearTimeout(captureTimer);
+        capturedModifiers.clear();
+        capturedKey = null;
+        document.getElementById('save-hold-key-capture').hidden = true;
+        document.getElementById('save-toggle-key-capture').hidden = true;
+        document.getElementById('cancel-hold-key-capture').hidden = true;
+        document.getElementById('cancel-toggle-key-capture').hidden = true;
+        setKey(button, key);
+        configure();
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    }
+    document.getElementById('save-hold-key-capture').onclick = saveCapturedKeys;
+    document.getElementById('save-toggle-key-capture').onclick = saveCapturedKeys;
+    document.getElementById('reset-keys').onclick = async () => {
+      try {
+        await cancelCapture();
+        setKey(shortcut, 'Ctrl+Space');
+        setKey(toggleShortcut, 'Ctrl+Shift+Space');
+        configure();
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    };
+    const modifierName = event => ({ Control: 'Ctrl', Alt: 'Alt', Shift: 'Shift', Meta: 'Meta' })[event.key];
+    function browserKey(event) {
+      const code = event.code;
+      if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+      if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+      if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code) || /^Numpad[0-9]$/.test(code)) return code;
+      const names = { Space: 'Space', Tab: 'Tab', Enter: 'Enter', Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', ArrowLeft: 'Left', ArrowUp: 'Up', ArrowRight: 'Right', ArrowDown: 'Down', Semicolon: 'Semicolon', Equal: 'Equals', Comma: 'Comma', Minus: 'Minus', Period: 'Period', Slash: 'Slash', Backquote: 'Backtick', BracketLeft: 'LeftBracket', Backslash: 'Backslash', BracketRight: 'RightBracket', Quote: 'Quote' };
+      return names[code] || null;
+    }
+    function captureBrowserKey(event) {
+      if (!capturingKind) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type !== 'keydown' || event.repeat) return;
+      if (event.key === 'Escape') {
+        cancelCapture().catch(error => status.textContent = String(error));
+        return;
+      }
+      const modifier = modifierName(event);
+      if (modifier) {
+        capturedModifiers.set(modifier, (event.location === 2 ? 'Right ' : '') + modifier);
+        updateCapturePreview();
+        return;
+      }
+      const key = browserKey(event);
+      if (!key) {
+        status.textContent = 'This key is not supported';
+        return;
+      }
+      if (capturedKey && capturedKey !== key) {
+        status.textContent = 'A combination can have only one non-modifier key. Cancel and try again.';
+        return;
+      }
+      for (const [name, pressed] of [['Ctrl', event.ctrlKey], ['Alt', event.altKey], ['Shift', event.shiftKey], ['Meta', event.metaKey]]) {
+        if (pressed && !capturedModifiers.has(name)) capturedModifiers.set(name, name);
+      }
+      capturedKey = key;
+      updateCapturePreview();
+    }
+    window.addEventListener('keydown', captureBrowserKey, true);
+    window.addEventListener('keyup', captureBrowserKey, true);
+    window.addEventListener('pagehide', () => invoke('cancel_key_capture').catch(() => {}));
+    document.getElementById('use-local').onclick = () => {
+      provider.value = 'local';
+      updateProvider();
+      configure();
+    };
+    document.getElementById('use-remote').onclick = () => {
+      provider.value = 'openai-compatible';
+      updateProvider();
+      configure();
+    };
+    document.getElementById('save-key').onclick = async () => {
+      const secret = apiKey.value;
+      if (!secret || !await configure()) return;
+      try {
+        await invoke('update_remote_credential', { secret });
+        apiKey.value = '';
+        legacyKeyEnv = null;
+        await configure();
+        await refreshCredentialStatus();
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    };
+    document.getElementById('remove-key').onclick = async () => {
+      if (!await configure()) return;
+      try {
+        await invoke('update_remote_credential', { secret: null });
+        apiKey.value = '';
+        await refreshCredentialStatus();
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    };
+    document.getElementById('open-models-folder').onclick = () => invoke('open_models_folder').catch(error => status.textContent = String(error));
+    window.__TAURI__.event.listen('model-download-progress', ({ payload }) => {
+      if (payload.state === 'downloading') {
+        status.textContent = `Downloading ${payload.id}: ${Math.floor(payload.downloaded * 100 / payload.total)}%`;
+      } else {
+        activeDownload = null;
+        status.textContent = payload.error || `${payload.id}: ${payload.state}`;
+        refreshModels();
+      }
+    });
     window.__TAURI__.event.listen('dictation-preview', ({ payload }) => {
       status.textContent = payload;
     });

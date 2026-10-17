@@ -7,6 +7,10 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, UIA_EditControlTypeId,
 };
+use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     KEYEVENTF_UNICODE, SendInput, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -26,6 +30,28 @@ pub struct Destination {
 }
 
 impl Destination {
+    pub fn app_name(&self) -> String {
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.process);
+            if handle.is_null() {
+                return "Unknown app".to_owned();
+            }
+
+            let mut path = [0u16; 1024];
+            let mut len = path.len() as u32;
+            let found = QueryFullProcessImageNameW(handle, 0, path.as_mut_ptr(), &mut len) != 0;
+            CloseHandle(handle);
+            if !found {
+                return "Unknown app".to_owned();
+            }
+
+            std::path::Path::new(&String::from_utf16_lossy(&path[..len as usize]))
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Unknown app".to_owned())
+        }
+    }
+
     fn native_edit(&self) -> bool {
         self.class.eq_ignore_ascii_case("Edit") || self.class.eq_ignore_ascii_case("RichEditD2DPT")
     }
@@ -40,6 +66,39 @@ pub fn destination_verified(
     verified
         && modifiers_released
         && original.is_some_and(|field| !field.password && Some(field) == current)
+}
+
+pub fn accessibility_ready() -> bool {
+    std::thread::spawn(|| unsafe {
+        if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+            return false;
+        }
+
+        let ready =
+            CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                .is_ok();
+        CoUninitialize();
+        ready
+    })
+    .join()
+    .unwrap_or(false)
+}
+
+pub fn foreground_window_handle() -> isize {
+    unsafe { GetForegroundWindow() as isize }
+}
+
+pub fn app_is_foreground() -> bool {
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return false;
+        }
+
+        let mut process = 0;
+        GetWindowThreadProcessId(window, &mut process);
+        process == std::process::id()
+    }
 }
 
 pub fn focused_destination() -> Option<Destination> {

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
+pub mod openai_compatible;
 #[cfg(feature = "local-whisper")]
 pub mod whisper;
 
@@ -11,13 +12,18 @@ pub enum SpeechConfig {
         model_id: String,
         artifact: PathBuf,
     },
-    SelfHosted {
-        adapter: String,
+    OpenAiCompatible {
         model_id: String,
         endpoint: String,
+        api_key_env: Option<String>,
+    },
+    Cloud {
+        provider: String,
+        model_id: String,
     },
 }
 
+#[derive(Debug)]
 pub struct Transcript {
     pub text: String,
     pub model_id: String,
@@ -45,9 +51,18 @@ pub fn load_provider(config: &SpeechConfig) -> Result<Box<dyn SpeechProvider>, S
         SpeechConfig::Local { .. } => {
             Err("Selected local speech adapter is unavailable".to_owned())
         }
-        SpeechConfig::SelfHosted { .. } => {
-            Err("Self-hosted speech is not available in this milestone".to_owned())
-        }
+        SpeechConfig::OpenAiCompatible {
+            model_id,
+            endpoint,
+            api_key_env,
+        } => Ok(Box::new(openai_compatible::OpenAiCompatible::new(
+            model_id.clone(),
+            endpoint,
+            api_key_env.as_deref(),
+        )?)),
+        SpeechConfig::Cloud { provider, model_id } => Ok(Box::new(
+            openai_compatible::OpenAiCompatible::cloud(model_id.clone(), provider)?,
+        )),
     }
 }
 
@@ -79,11 +94,15 @@ mod tests {
             artifact: "missing.bin".into(),
         };
         assert!(load_provider(&config).is_err());
+        assert!(load_provider(&SpeechConfig::Cloud {
+            provider: "unknown".to_owned(),
+            model_id: "test".to_owned(),
+        }).is_err());
         assert!(
-            load_provider(&SpeechConfig::SelfHosted {
-                adapter: "remote".to_owned(),
+            load_provider(&SpeechConfig::OpenAiCompatible {
                 model_id: "test".to_owned(),
-                endpoint: "https://example.invalid".to_owned(),
+                endpoint: "not a URL".to_owned(),
+                api_key_env: None,
             })
             .is_err()
         );
