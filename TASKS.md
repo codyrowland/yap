@@ -1,44 +1,49 @@
 # Yap tasks
 
-The Yap Onboarding, Settings, and History screens in `C:\Users\codyr\Downloads\Hush desktop transcription app` are the product spec. `Settings v1` (Hush) is an older design, not a second spec. Mockup interactions must be backed by real app behavior.
+The product spec is **flow 2 (2a–2i)** on the Yap mockups canvas (Claude Design project "Yap", page "Hush Mockups"): onboarding, Settings (talk keys, on-device, cloud, self-hosted, general), History, recording overlay and tray popover. The older Hush round has been removed from the canvas. Mockup interactions must be backed by real app behavior; anything not yet real is shown disabled ("Coming soon").
 
-Next: talk keys and onboarding → cloud providers → other on-device model families.
+Next: run the new build on Windows and walk 2a–2i → protocol adapters for the remaining cloud providers → other on-device model families.
+
+## Structure
+
+- [x] Settings stored as JSON (`settings.json`, serde) with a one-time import of the old line-based `settings.txt` (v1–v5). Atomic writes.
+- [x] Split the 1,800-line `main.rs` into `config`, `state`, `dictation`, `overlay`, `tray`, `onboarding`, `commands`, `clipboard`, `autostart`, `input_test`.
+- [x] Cross-check and unit tests run from Linux: `cargo check/test --target x86_64-pc-windows-gnu --no-default-features` (tests under Wine). whisper.cpp itself still needs a Windows build.
+- [x] Removed the leftover root crate `yap-input-probe` (`/Cargo.toml`, `/src`), superseded by `app/src-tauri/src/bin/input_harness.rs`.
 
 ## Provider support
 
-- [x] Make speech provider selection an explicit setting and snapshot it per dictation job. Keep local whisper.cpp working.
-- [x] Migrate existing v1/v2 settings without losing local model or microphone preferences.
-- [x] Add an OpenAI-compatible transcription adapter for hosted APIs and models served on another computer (JSON `text` response, WAV multipart upload, optional API key from an environment variable).
-- [x] Wire provider selection, endpoint, model, and authentication environment variable through saved settings and dictation; do not store API keys in `settings.txt`.
-- [x] Update the current basic UI to select local or OpenAI-compatible transcription and configure the relevant fields.
-- [ ] Replace the basic UI with the Yap Settings design; make each control reflect and persist real state.
-- [ ] Support each cloud provider shown in Yap Settings: OpenAI, Deepgram, AssemblyAI, Groq, ElevenLabs, Google Cloud Speech-to-Text, Azure AI Speech, AWS Transcribe, Speechmatics, Fireworks AI, and custom OpenAI-compatible API. Implement protocol-specific adapters where necessary.
-- [ ] Support the separate self-hosted server settings, optional auth token, and real connection tests for cloud and self-hosted engines.
-- [x] Store OpenAI-compatible endpoint credentials in Windows Credential Manager; never write keys or tokens into the settings file or history.
-- [ ] Extend credential storage to each cloud provider and self-hosted configuration.
-- [x] Support Whisper model catalog, verified download/progress/cancel, selection, storage usage, and opening the model folder.
-- [ ] Support the mockup's other on-device model families with matching inference runtimes and verified model downloads.
+- [x] Local whisper.cpp, OpenAI-compatible self-hosted server, explicit engine selection snapshotted per job.
+- [x] Cloud provider registry with the 11 designed providers. Working today (OpenAI protocol): OpenAI, Groq, Fireworks AI, Custom OpenAI-compatible API. Listed but disabled: Deepgram, AssemblyAI, ElevenLabs, Google Cloud, Azure, AWS Transcribe, Speechmatics.
+- [ ] Protocol-specific adapters for the disabled providers (Google service-account file, AWS SigV4, Azure region keys, etc.).
+- [x] Per-provider keys in Windows Credential Manager; the custom API's key is bound to its base URL; self-hosted token bound to the server URL.
+- [x] Real "Test connection" for cloud and self-hosted (uploads one second of silence; reports latency or the error).
+- [x] Whisper model catalog: verified download/progress/cancel, select, delete, storage usage, open folder.
+- [ ] Other on-device families (Parakeet, Canary, Moonshine, Qwen3-ASR, Voxtral, Kyutai, Vosk, SenseVoice, Granite) — shown as "Coming soon". Suggest starting with one shared runtime (e.g. sherpa-onnx) for Parakeet/Moonshine/SenseVoice.
 
 ## Onboarding and input
 
-- [x] Implement first-run five-step onboarding with real microphone/UI Automation checks on Windows, supported engine setup, talk-key selection, and a live talk-key trial inside Yap; resume unfinished setup after relaunch.
-- [ ] Expand onboarding choices as the remaining cloud and on-device engines become available.
-- [x] Support separate hold and toggle keys, sequential capture of chord bindings (including Windows and right-side modifier keys), conflict handling, reset, and Esc cancellation on Windows; migrate existing F8–F10 bindings. Reject shortcuts reserved by Windows.
-- [ ] Support the General controls for insertion method (paste with clipboard restoration or simulated typing) and spoken language.
+- [x] Five-step onboarding with real checks; engine step offers on-device, cloud (supported providers) and self-hosted.
+- [x] Separate hold and toggle keys with sequential capture, conflicts, reset, Esc cancel.
+- [x] Insertion method: paste with clipboard restore (falls back to typing when the clipboard holds non-text; skips clipboard history) or simulated typing.
+- [x] Spoken language (auto, en, de, es, fr) passed to whisper.cpp and OpenAI-protocol providers.
+- [x] Open at login (HKCU Run key, starts hidden in the tray).
+- [ ] "Start and stop sounds" toggle from the design (not built; omitted from General).
+
+## Overlay and tray (2h, 2i)
+
+- [x] Overlay window at the bottom of the active monitor: live level meter + timer, hold vs toggle (Stop button), transcribing with engine/model, "Inserted N words into App" with Undo (Ctrl+Z if the same field still has focus), errors.
+- [x] Recordings up to 5 minutes; hitting the limit stops and transcribes instead of discarding.
+- [x] Tray popover on left-click: status, talk keys, engine switcher, History…, Settings…, Quit. Right-click keeps a native menu.
+- [ ] Friendlier app names in "Inserted into …" (currently the process name, e.g. OUTLOOK).
+- [ ] Optional live partial text in the overlay.
 
 ## History
 
-- [x] Persist successful insertions with the app, time, duration, text, engine, and model needed by Yap History; expire entries after the current local calendar day.
-- [x] Implement the History screen's search, app filter, selection, copy, and deletion against persisted data.
-- [x] Keep history enabled for the current local calendar day only; clear it when a new day starts or the app next opens.
+- [x] Persisted insertions for the current day; search, app filter, copy, delete.
 
 ## Reliability
 
-- [ ] Define and enforce remote request timeouts, cancellation, response-size limits, and useful error reporting. Never insert late results from cancelled or superseded jobs.
-- [x] Avoid holding the session mutex during audio stopping/normalization or network work.
-- [ ] Test settings migration and adapter success, malformed responses, authentication errors, timeouts, and cancellation against a controllable server.
-
-## Open decisions
-
-- [ ] Remove the interim environment-variable credential fallback after migrating existing configurations to the system credential store.
-- [x] Start with OpenAI-compatible multipart WAV upload and JSON `text` response; use optional bearer authentication from an environment variable. Other server protocols can get separate adapters later.
+- [x] Request timeouts (90 s per upload), response-size limits, cancellation; late results from cancelled jobs are never inserted.
+- [ ] Integration test for settings migration on a real Windows profile, and the input harness against paste insertion.
+- [ ] Remove the interim environment-variable credential fallback once existing configs have migrated.

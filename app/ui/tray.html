@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Yap</title>
+  <link rel="stylesheet" href="classical.css">
+  <style>
+    html, body { overflow: hidden; }
+    .pop { height: 100vh; display: flex; flex-direction: column; background: var(--color-bg); border: 2px solid var(--color-text); }
+    .head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 2px solid var(--color-divider); }
+    .head strong { font-family: var(--font-heading); font-size: 19px; flex: 1; }
+    .keys { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--color-divider); }
+    .keys div { display: flex; align-items: center; gap: 6px; }
+    .keys div > span:first-child { font-size: 13px; flex: 1; }
+    .engines { padding: 4px 0; }
+    .engine { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 16px; border: 0; background: transparent; text-align: left; }
+    .engine:hover { background: color-mix(in srgb, var(--color-accent-100) 60%, transparent); }
+    .engine[aria-checked='true'] { background: var(--color-accent-100); }
+    .engine .ring { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 1.5px solid var(--color-divider); box-shadow: inset 0 0 0 3px var(--color-bg); }
+    .engine[aria-checked='true'] .ring { border-color: var(--color-accent); background: var(--color-accent); }
+    .engine .text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .engine .text strong { font-size: 13px; }
+    .engine .text span { font-size: 12px; opacity: .65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .engine.unready .text span { font-style: italic; }
+    .menu { display: flex; flex-direction: column; border-top: 2px solid var(--color-divider); padding: 4px 0; margin-top: auto; }
+    .menu .btn { justify-content: flex-start; font-weight: 500; font-size: 14px; padding: 8px 16px; border-radius: 0; }
+    .menu .btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+    #error { font-size: 12px; padding: 0 16px 6px; color: var(--color-accent-700); }
+  </style>
+</head>
+<body>
+  <div class="pop">
+    <div class="head"><strong>Yap</strong><span class="tag tag-neutral" id="status">Ready</span></div>
+    <div class="keys">
+      <div><span>Hold to talk</span><span id="hold"></span></div>
+      <div><span>Toggle dictation</span><span id="toggle"></span></div>
+    </div>
+    <div class="kicker" style="padding:10px 16px 4px">Engine</div>
+    <div class="engines" id="engines" role="radiogroup" aria-label="Engine"></div>
+    <div id="error" role="status"></div>
+    <div class="menu">
+      <button class="btn" type="button" id="history">History…</button>
+      <button class="btn" type="button" id="settings">Settings…</button>
+      <button class="btn" type="button" id="quit">Quit Yap</button>
+    </div>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+    const $ = id => document.getElementById(id);
+
+    function caps(shortcut) {
+      const wrap = document.createElement('span');
+      wrap.style.cssText = 'display:inline-flex;gap:6px';
+      for (const part of shortcut.split('+')) {
+        const cap = document.createElement('span');
+        cap.className = 'keycap keycap-small';
+        cap.textContent = part;
+        wrap.append(cap);
+      }
+      return wrap;
+    }
+
+    async function refresh() {
+      try {
+        const state = await invoke('tray_state');
+        $('status').textContent = state.status;
+        $('status').className = 'tag ' + (state.status === 'Ready' ? 'tag-neutral' : 'tag-accent');
+        $('hold').replaceChildren(caps(state.holdKey));
+        $('toggle').replaceChildren(caps(state.toggleKey));
+        const list = $('engines');
+        list.replaceChildren();
+        for (const engine of state.engines) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'engine' + (engine.ready ? '' : ' unready');
+          button.setAttribute('role', 'radio');
+          button.setAttribute('aria-checked', String(engine.id === state.engine));
+          button.innerHTML = '<span class="ring"></span><span class="text"><strong></strong><span></span></span>';
+          button.querySelector('strong').textContent = engine.label;
+          button.querySelector('.text span').textContent = engine.detail;
+          button.onclick = async () => {
+            if (engine.id === state.engine) return;
+            try { await invoke('set_engine', { engine: engine.id }); $('error').textContent = ''; }
+            catch (error) { $('error').textContent = String(error); }
+            refresh();
+          };
+          list.append(button);
+        }
+      } catch (error) {
+        $('error').textContent = String(error);
+      }
+    }
+
+    $('history').onclick = () => invoke('open_window', { page: 'history' });
+    $('settings').onclick = () => invoke('open_window', { page: 'settings' });
+    $('quit').onclick = () => invoke('quit_app');
+    window.addEventListener('keydown', event => { if (event.key === 'Escape') window.__TAURI__.window.getCurrentWindow().hide(); });
+    listen('tray-refresh', () => { $('error').textContent = ''; refresh(); });
+    listen('settings-changed', refresh);
+    refresh();
+  </script>
+</body>
+</html>

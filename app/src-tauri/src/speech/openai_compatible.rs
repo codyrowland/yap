@@ -15,41 +15,60 @@ pub struct OpenAiCompatible {
     endpoint: Url,
     model_id: String,
     api_key: Option<String>,
+    language: Option<String>,
 }
+
+/// Upper bound for one request. Long toggle recordings can take a while to
+/// upload and transcribe; cancellation is still checked around the request.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 impl OpenAiCompatible {
     pub fn new(
         model_id: String,
         endpoint: &str,
         api_key_env: Option<&str>,
+        language: Option<&str>,
     ) -> Result<Self, String> {
         let api_key = credential_store::read(&credential_store::remote_target(endpoint)?)?
             .or_else(|| api_key_env.and_then(|name| std::env::var(name).ok()))
             .filter(|value| !value.trim().is_empty());
-        if api_key.is_none() {
-            if let Some(name) = api_key_env {
-                return Err(format!(
-                    "Save an API key or set the {name} environment variable"
-                ));
-            }
+        if api_key.is_none()
+            && let Some(name) = api_key_env
+        {
+            return Err(format!(
+                "Save an API key or set the {name} environment variable"
+            ));
         }
 
-        Self::with_key(model_id, endpoint, api_key)
+        Self::with_key(model_id, endpoint, api_key, language)
     }
 
-    pub fn cloud(model_id: String, provider: &str) -> Result<Self, String> {
-        let target = credential_store::cloud_target(provider)?;
-        let api_key = credential_store::read(target)?
-            .filter(|value| !value.trim().is_empty())
-            .ok_or("Save an OpenAI API key before dictating")?;
-        Self::with_key(
-            model_id,
-            "https://api.openai.com/v1/audio/transcriptions",
-            Some(api_key),
-        )
+    pub fn cloud(
+        model_id: String,
+        provider: &str,
+        base_url: &str,
+        language: Option<&str>,
+    ) -> Result<Self, String> {
+        let details = super::cloud::provider(provider)
+            .filter(|details| details.supported)
+            .ok_or("This cloud provider is not supported yet")?;
+        let endpoint = super::cloud::endpoint(provider, &model_id, base_url)?;
+        let api_key = credential_store::read(&credential_store::cloud_target(provider, base_url)?)?
+            .filter(|value| !value.trim().is_empty());
+        // A custom server may not need a key; hosted providers always do.
+        if api_key.is_none() && provider != "custom" {
+            return Err(format!("Save a {} API key before dictating", details.label));
+        }
+
+        Self::with_key(model_id, &endpoint, api_key, language)
     }
 
-    fn with_key(model_id: String, endpoint: &str, api_key: Option<String>) -> Result<Self, String> {
+    fn with_key(
+        model_id: String,
+        endpoint: &str,
+        api_key: Option<String>,
+        language: Option<&str>,
+    ) -> Result<Self, String> {
         if model_id.trim().is_empty() {
             return Err("Select a transcription model".to_owned());
         }
@@ -64,7 +83,7 @@ impl OpenAiCompatible {
         }
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(25))
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| "Could not initialize transcription HTTP client".to_owned())?;
         Ok(Self {
@@ -72,6 +91,7 @@ impl OpenAiCompatible {
             endpoint,
             model_id,
             api_key,
+            language: language.map(str::to_owned),
         })
     }
 }
@@ -108,27 +128,23 @@ fn wav(samples: &[f32]) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-impl SpeechProvider for OpenAiCompatible {
-    fn transcribe(
-        &mut self,
+impl OpenAiCompatible {
+    /// Uploads audio and returns the parsed JSON body.
+    fn post(
+        &self,
         samples_16k_mono: &[f32],
         cancelled: &AtomicBool,
-    ) -> Result<Transcript, String> {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("Cancelled".to_owned());
-        }
-
-        if samples_16k_mono.len() < 1_600 {
-            return Err("No meaningful audio".to_owned());
-        }
-
+    ) -> Result<serde_json::Value, String> {
         let audio = multipart::Part::bytes(wav(samples_16k_mono)?)
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|_| "Could not prepare audio upload".to_owned())?;
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .text("model", self.model_id.clone())
             .part("file", audio);
+        if let Some(language) = &self.language {
+            form = form.text("language", language.clone());
+        }
         let mut request = self.client.post(self.endpoint.clone()).multipart(form);
         if let Some(key) = &self.api_key {
             request = request.bearer_auth(key);
@@ -145,11 +161,20 @@ impl SpeechProvider for OpenAiCompatible {
             return Err("Cancelled".to_owned());
         }
 
-        if !response.status().is_success() {
-            return Err(format!(
-                "Transcription server returned {}",
-                response.status()
-            ));
+        match response.status().as_u16() {
+            200..=299 => {}
+            401 | 403 => {
+                return Err(format!(
+                    "Transcription server rejected the credentials ({})",
+                    response.status()
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "Transcription server returned {}",
+                    response.status()
+                ));
+            }
         }
 
         let mut body = Vec::new();
@@ -165,9 +190,40 @@ impl SpeechProvider for OpenAiCompatible {
             return Err("Transcription response is too large".to_owned());
         }
 
-        let text = serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|value| value.get("text")?.as_str().map(str::to_owned))
+        serde_json::from_slice(&body).map_err(|_| "Invalid transcription response".to_owned())
+    }
+
+    /// Sends one second of silence to confirm the URL, credentials and model
+    /// work. Returns the round-trip time. An empty transcript is fine here.
+    pub fn check(&self) -> Result<Duration, String> {
+        let started = std::time::Instant::now();
+        let body = self.post(&[0.0; 16_000], &AtomicBool::new(false))?;
+        if body.get("text").is_some_and(serde_json::Value::is_string) {
+            Ok(started.elapsed())
+        } else {
+            Err("Invalid transcription response".to_owned())
+        }
+    }
+}
+
+impl SpeechProvider for OpenAiCompatible {
+    fn transcribe(
+        &mut self,
+        samples_16k_mono: &[f32],
+        cancelled: &AtomicBool,
+    ) -> Result<Transcript, String> {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Cancelled".to_owned());
+        }
+
+        if samples_16k_mono.len() < 1_600 {
+            return Err("No meaningful audio".to_owned());
+        }
+
+        let text = self
+            .post(samples_16k_mono, cancelled)?
+            .get("text")
+            .and_then(|text| text.as_str().map(str::to_owned))
             .filter(|text| !text.trim().is_empty())
             .ok_or("Invalid transcription response")?;
         Ok(Transcript {
@@ -196,8 +252,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid_endpoints_and_missing_model() {
-        assert!(OpenAiCompatible::new("model".into(), "file:///tmp/audio", None).is_err());
-        assert!(OpenAiCompatible::new("".into(), "https://example.com", None).is_err());
+        assert!(OpenAiCompatible::new("model".into(), "file:///tmp/audio", None, None).is_err());
+        assert!(OpenAiCompatible::new("".into(), "https://example.com", None, None).is_err());
     }
 
     fn server_response(
@@ -256,7 +312,8 @@ mod tests {
     fn posts_multipart_audio_and_parses_transcript() {
         let (endpoint, server) =
             server_response(200, b"{\"text\":\"hello\"}".to_vec(), Duration::ZERO);
-        let mut provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None).unwrap();
+        let mut provider =
+            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
         let transcript = provider
             .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
             .unwrap();
@@ -277,6 +334,42 @@ mod tests {
     }
 
     #[test]
+    fn sends_language_only_when_one_is_chosen() {
+        let (endpoint, server) =
+            server_response(200, b"{\"text\":\"hola\"}".to_vec(), Duration::ZERO);
+        let mut provider =
+            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, Some("es")).unwrap();
+        provider
+            .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
+            .unwrap();
+        let request = server.join().unwrap();
+        let needle = b"name=\"language\"\r\n\r\nes";
+        assert!(request.windows(needle.len()).any(|part| part == needle));
+
+        let (endpoint, server) =
+            server_response(200, b"{\"text\":\"hi\"}".to_vec(), Duration::ZERO);
+        let mut provider =
+            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        provider
+            .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(!request.windows(15).any(|part| part == b"name=\"language\""));
+    }
+
+    #[test]
+    fn connection_check_accepts_an_empty_transcript() {
+        let (endpoint, server) = server_response(200, b"{\"text\":\"\"}".to_vec(), Duration::ZERO);
+        let provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        assert!(provider.check().is_ok());
+        server.join().unwrap();
+        let (endpoint, server) = server_response(401, b"no".to_vec(), Duration::ZERO);
+        let provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        assert!(provider.check().unwrap_err().contains("credentials"));
+        server.join().unwrap();
+    }
+
+    #[test]
     fn rejects_authentication_errors_and_invalid_responses() {
         for (status, body, expected) in [
             (401, b"unauthorized".to_vec(), "401"),
@@ -292,7 +385,8 @@ mod tests {
             ),
         ] {
             let (endpoint, server) = server_response(status, body, Duration::ZERO);
-            let mut provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None).unwrap();
+            let mut provider =
+                OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
             let error = provider
                 .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
                 .unwrap_err();
@@ -308,7 +402,8 @@ mod tests {
             b"{\"text\":\"late\"}".to_vec(),
             Duration::from_millis(100),
         );
-        let mut provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None).unwrap();
+        let mut provider =
+            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel = Arc::clone(&cancelled);
         let worker = std::thread::spawn(move || provider.transcribe(&[0.01; 1_600], &cancel));

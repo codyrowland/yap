@@ -19,10 +19,17 @@ pub fn remote_target(endpoint: &str) -> Result<String, String> {
     Ok(format!("Yap/transcription/{url}"))
 }
 
-pub fn cloud_target(provider: &str) -> Result<&'static str, String> {
-    match provider {
-        "openai" => Ok("Yap/cloud/openai"),
-        _ => Err("Unsupported cloud provider".to_owned()),
+/// One credential per cloud provider. The custom API's key is tied to its
+/// base URL so switching URLs never sends an old key to a new host.
+pub fn cloud_target(provider: &str, custom_base_url: &str) -> Result<String, String> {
+    match crate::speech::cloud::provider(provider) {
+        Some(provider) if provider.id == "custom" => {
+            let base = remote_target(custom_base_url.trim())
+                .map_err(|_| "Enter a valid base URL for the custom API".to_owned())?;
+            Ok(base.replacen("Yap/transcription/", "Yap/cloud/custom/", 1))
+        }
+        Some(provider) => Ok(format!("Yap/cloud/{}", provider.id)),
+        None => Err("Unsupported cloud provider".to_owned()),
     }
 }
 
@@ -101,8 +108,14 @@ mod tests {
     fn rejects_invalid_credentials() {
         assert!(target_name("bad\0target").is_err());
         assert!(remote_target("file:///tmp/audio").is_err());
-        assert_eq!(cloud_target("openai").unwrap(), "Yap/cloud/openai");
-        assert!(cloud_target("unknown").is_err());
+        assert_eq!(cloud_target("openai", "").unwrap(), "Yap/cloud/openai");
+        assert_eq!(cloud_target("groq", "").unwrap(), "Yap/cloud/groq");
+        assert!(cloud_target("unknown", "").is_err());
+        assert!(cloud_target("custom", "").is_err());
+        assert_ne!(
+            cloud_target("custom", "https://a.example/v1").unwrap(),
+            cloud_target("custom", "https://b.example/v1").unwrap()
+        );
         assert_ne!(
             remote_target("https://a.example/v1/audio/transcriptions").unwrap(),
             remote_target("https://b.example/v1/audio/transcriptions").unwrap()

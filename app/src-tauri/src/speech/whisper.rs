@@ -8,10 +8,11 @@ use super::{SpeechProvider, Transcript};
 pub struct LocalWhisper {
     context: WhisperContext,
     model_id: String,
+    language: Option<String>,
 }
 
 impl LocalWhisper {
-    pub fn load(model_id: String, artifact: &Path) -> Result<Self, String> {
+    pub fn load(model_id: String, artifact: &Path, language: Option<&str>) -> Result<Self, String> {
         if !artifact.is_file() {
             return Err("Select an installed whisper.cpp model file".to_owned());
         }
@@ -20,7 +21,11 @@ impl LocalWhisper {
         let context =
             WhisperContext::new_with_params(artifact, WhisperContextParameters::default())
                 .map_err(|error| error.to_string())?;
-        Ok(Self { context, model_id })
+        Ok(Self {
+            context,
+            model_id,
+            language: language.map(str::to_owned),
+        })
     }
 }
 
@@ -44,6 +49,8 @@ impl SpeechProvider for LocalWhisper {
             .map_err(|error| error.to_string())?;
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_translate(false);
+        // "auto" asks whisper.cpp to detect the spoken language.
+        params.set_language(Some(self.language.as_deref().unwrap_or("auto")));
         params.set_no_context(true);
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -74,8 +81,12 @@ mod tests {
     #[test]
     fn missing_model_is_a_recoverable_error() {
         assert!(
-            LocalWhisper::load("missing".to_owned(), Path::new("missing-whisper-model.bin"))
-                .is_err()
+            LocalWhisper::load(
+                "missing".to_owned(),
+                Path::new("missing-whisper-model.bin"),
+                None
+            )
+            .is_err()
         );
     }
 
@@ -88,7 +99,8 @@ mod tests {
             .chunks_exact(4)
             .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
-        let mut provider = LocalWhisper::load("base".to_owned(), Path::new(&model)).unwrap();
+        let mut provider =
+            LocalWhisper::load("base".to_owned(), Path::new(&model), Some("en")).unwrap();
         let result = provider
             .transcribe(&samples, &AtomicBool::new(false))
             .unwrap();

@@ -1,5 +1,13 @@
 {
   "identifier": "main",
-  "windows": ["main"],
-  "permissions": ["core:event:allow-listen"]
+  "windows": [
+    "main",
+    "overlay",
+    "tray"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-hide"
+  ]
 }

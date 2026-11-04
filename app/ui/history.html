@@ -8,7 +8,9 @@
 </head>
 <body>
   <div class="history">
-    <header class="topbar"><span class="brand-square"></span>Yap History <a href="index.html">Settings</a></header>
+    <header class="topbar"><span class="brand-square"></span>Yap
+      <nav><a href="index.html">Settings</a><a href="history.html" aria-current="page">History</a></nav>
+    </header>
     <div class="history-toolbar">
       <input id="query" class="input" type="search" placeholder="Search transcriptions" aria-label="Search transcriptions">
       <select id="app-filter" class="input" aria-label="Filter by app"><option>All apps</option></select>
@@ -79,7 +81,7 @@
       const header = node('div', '', 'history-detail-head');
       const title = node('div', '');
       title.append(node('small', selected.app), node('h1', `Today, ${time(selected)}`));
-      const copy = node('button', 'Copy text', 'btn');
+      const copy = node('button', 'Copy text', 'btn btn-primary');
       copy.type = 'button';
       copy.onclick = async () => {
         try {

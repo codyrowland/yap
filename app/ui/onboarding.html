@@ -26,7 +26,7 @@
             <p>Yap listens only while you dictate, then inserts text into the app you're using.</p>
             <div class="row"><span>Microphone<br><small>To hear you while recording.</small></span><strong id="mic-state">Checking…</strong></div>
             <div class="row"><span>Accessibility<br><small>Windows does not require a separate grant. Yap checks that UI Automation is available.</small></span><strong id="access-state">Checking…</strong></div>
-            <label for="microphone">Microphone</label>
+            <label class="field" for="microphone">Microphone</label>
             <select id="microphone" class="input"></select>
             <button id="check-permissions" type="button" class="btn btn-secondary">Check again</button>
             <p id="permission-error" role="status"></p>
@@ -35,8 +35,9 @@
             <small>Step 2 of 5</small>
             <h2>Where should speech be transcribed?</h2>
             <p>You can change this any time in Settings.</p>
-            <label class="row"><span>On this computer<br><small>Private and offline after downloading a Whisper model.</small></span><input name="engine" type="radio" value="local" checked></label>
-            <label class="row"><span>OpenAI-compatible API<br><small>OpenAI or your own transcription server. Audio is sent to the URL you choose.</small></span><input name="engine" type="radio" value="openai-compatible"></label>
+            <label class="row radio"><span>On this computer<br><small>Private and offline after downloading a Whisper model.</small></span><input name="engine" type="radio" value="local" checked><span class="dot"></span></label>
+            <label class="row radio"><span>Cloud API<br><small>OpenAI, Groq, Fireworks AI or another OpenAI-compatible service, with your own API key.</small></span><input name="engine" type="radio" value="cloud"><span class="dot"></span></label>
+            <label class="row radio"><span>Self-hosted server<br><small>A transcription server you run on another machine.</small></span><input name="engine" type="radio" value="remote"><span class="dot"></span></label>
           </section>
           <section id="step-2" hidden>
             <small>Step 3 of 5</small>
@@ -45,14 +46,29 @@
               <p>Select a model to run locally. More sizes are available in Settings → On-device.</p>
               <div id="starter-models"></div>
             </div>
+            <div id="cloud-setup" hidden>
+              <h2>Connect a cloud provider</h2>
+              <p>Audio is sent to the provider for each dictation and billed to your account. The key is kept in Windows Credential Manager, not in settings.</p>
+              <label class="field" for="cloud-provider">Provider</label>
+              <select id="cloud-provider" class="input"></select>
+              <div id="custom-url-field" hidden>
+                <label class="field" for="custom-url">Base URL</label>
+                <input id="custom-url" class="input" type="url" placeholder="https://api.example.com/v1">
+              </div>
+              <label class="field" for="cloud-key">API key</label>
+              <input id="cloud-key" class="input" type="password" autocomplete="off">
+              <label class="field" for="cloud-model">Model</label>
+              <select id="cloud-model" class="input"></select>
+              <input id="cloud-model-text" class="input" type="text" placeholder="whisper-large-v3" hidden>
+            </div>
             <div id="remote-setup" hidden>
               <h2>Connect a transcription server</h2>
               <p>Enter an OpenAI-compatible transcription endpoint. API keys are kept in Windows Credential Manager, not in settings.</p>
-              <label for="endpoint">Transcription URL</label>
-              <input id="endpoint" class="input" type="url" placeholder="https://api.openai.com/v1/audio/transcriptions">
-              <label for="remote-model">Model</label>
+              <label class="field" for="endpoint">Transcription URL</label>
+              <input id="endpoint" class="input" type="url" placeholder="https://asr.home.lan:9000/v1/audio/transcriptions">
+              <label class="field" for="remote-model">Model</label>
               <input id="remote-model" class="input" type="text" placeholder="whisper-1">
-              <label for="api-key">API key or auth token (optional)</label>
+              <label class="field" for="api-key">Auth token (optional)</label>
               <input id="api-key" class="input" type="password" autocomplete="off">
             </div>
           </section>
@@ -60,13 +76,13 @@
             <small>Step 4 of 5</small>
             <h2>Set your talk keys</h2>
             <p>Press keys one at a time, then choose Save keys. Hold them together when dictating in other apps. Choose two different combinations.</p>
-            <label for="hold-key">Hold to talk</label>
+            <label class="field" for="hold-key">Hold to talk</label>
             <button id="hold-key" class="btn btn-secondary" type="button">Ctrl+Space</button>
-            <button id="save-hold-key-capture" class="btn" type="button" hidden>Save keys</button>
+            <button id="save-hold-key-capture" class="btn btn-primary" type="button" hidden>Save keys</button>
             <button id="cancel-hold-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
-            <label for="toggle-key">Toggle dictation</label>
+            <label class="field" for="toggle-key">Toggle dictation</label>
             <button id="toggle-key" class="btn btn-secondary" type="button">Ctrl+Shift+Space</button>
-            <button id="save-toggle-key-capture" class="btn" type="button" hidden>Save keys</button>
+            <button id="save-toggle-key-capture" class="btn btn-primary" type="button" hidden>Save keys</button>
             <button id="cancel-toggle-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
             <p>Press Esc to cancel a recording without inserting text.</p>
           </section>
@@ -79,7 +95,7 @@
           </section>
           <div id="message" role="status"></div>
         </div>
-        <footer><button id="back" class="btn btn-secondary" type="button" hidden>Back</button><button id="next" class="btn" type="button">Continue</button></footer>
+        <footer><button id="back" class="btn btn-secondary" type="button" hidden>Back</button><button id="next" class="btn btn-primary" type="button">Continue</button></footer>
       </main>
     </div>
   </div>
@@ -158,7 +174,8 @@
       document.getElementById('back').hidden = step === 0;
       next.textContent = step === 4 ? 'Finish' : 'Continue';
       document.getElementById('local-setup').hidden = engine() !== 'local';
-      document.getElementById('remote-setup').hidden = engine() === 'local';
+      document.getElementById('cloud-setup').hidden = engine() !== 'cloud';
+      document.getElementById('remote-setup').hidden = engine() !== 'remote';
       status.textContent = '';
     }
 
@@ -218,27 +235,65 @@
       }
     }
 
+    let providers = [];
+    function renderCloudFields() {
+      const providerId = document.getElementById('cloud-provider').value;
+      const provider = providers.find(p => p.id === providerId);
+      const select = document.getElementById('cloud-model');
+      const typed = document.getElementById('cloud-model-text');
+      document.getElementById('custom-url-field').hidden = providerId !== 'custom';
+      select.replaceChildren(...(provider?.models || []).map(m => new Option(m, m)));
+      if (saved.cloudModels[providerId]) select.value = saved.cloudModels[providerId];
+      select.hidden = !provider?.models.length;
+      typed.hidden = !!provider?.models.length;
+    }
+
     async function saveSettings() {
       const selected = models.find(item => item.id === selectedModel);
-      const provider = engine();
-      if (provider === 'local' && !selected?.path) throw new Error('Download a model before continuing.');
-      if (provider !== 'local' && (!endpoint.value.trim() || !remoteModel.value.trim())) throw new Error('Enter a transcription URL and model.');
-      await invoke('configure', {
-        index: Number(microphone.value), modelPath: provider === 'local' ? selected.path : saved.modelPath,
-        shortcut: holdKey.value, toggleShortcut: toggleKey.value, provider,
-        endpoint: endpoint.value.trim(), remoteModel: remoteModel.value.trim(), apiKeyEnv: saved.apiKeyEnv
-      });
-      saved = await invoke('current_settings');
-      if (provider !== 'local' && apiKey.value) {
-        await invoke('update_remote_credential', { secret: apiKey.value });
+      const choice = engine();
+      const next = { ...saved, engine: choice, microphoneIndex: Number(microphone.value), holdKey: holdKey.value, toggleKey: toggleKey.value };
+      if (choice === 'local') {
+        if (!selected?.path) throw new Error('Download a model before continuing.');
+        next.localModelPath = selected.path;
+      } else if (choice === 'cloud') {
+        const providerId = document.getElementById('cloud-provider').value;
+        const typed = document.getElementById('cloud-model-text');
+        const model = typed.hidden ? document.getElementById('cloud-model').value : typed.value.trim();
+        if (!model) throw new Error('Choose a model.');
+        next.cloudProvider = providerId;
+        next.cloudModels = { ...saved.cloudModels, [providerId]: model };
+        if (providerId === 'custom') next.customBaseUrl = document.getElementById('custom-url').value.trim();
+      } else {
+        if (!endpoint.value.trim() || !remoteModel.value.trim()) throw new Error('Enter a server URL and model.');
+        next.remoteEndpoint = endpoint.value.trim();
+        next.remoteModel = remoteModel.value.trim();
+      }
+      saved = await invoke('save_settings', { settings: next });
+      const cloudKey = document.getElementById('cloud-key');
+      if (choice === 'cloud' && cloudKey.value) {
+        await invoke('update_credential', { kind: 'cloud', provider: saved.cloudProvider, secret: cloudKey.value });
+        cloudKey.value = '';
+      }
+      if (choice === 'cloud' && saved.cloudProvider !== 'custom' && !await invoke('credential_status', { kind: 'cloud', provider: saved.cloudProvider })) {
+        throw new Error('Enter an API key.');
+      }
+      if (choice === 'remote' && apiKey.value) {
+        await invoke('update_credential', { kind: 'remote', provider: '', secret: apiKey.value });
         apiKey.value = '';
       }
     }
 
-    Promise.all([invoke('microphones'), invoke('current_settings'), invoke('model_catalog')]).then(([devices, settings, catalog]) => {
+    Promise.all([invoke('microphones'), invoke('current_settings'), invoke('catalog')]).then(([devices, settings, catalog]) => {
       saved = settings;
-      models = catalog;
-      const installed = models.find(item => item.path === settings.modelPath);
+      models = catalog.whisper;
+      providers = catalog.providers.filter(p => p.supported);
+      const providerSelect = document.getElementById('cloud-provider');
+      for (const p of providers) providerSelect.add(new Option(p.label, p.id));
+      providerSelect.value = providers.some(p => p.id === settings.cloudProvider) ? settings.cloudProvider : 'openai';
+      providerSelect.onchange = renderCloudFields;
+      document.getElementById('custom-url').value = settings.customBaseUrl;
+      renderCloudFields();
+      const installed = models.find(item => item.path === settings.localModelPath);
       if (installed) selectedModel = installed.id;
       for (const [index, name] of devices.entries()) {
         const option = document.createElement('option');
@@ -246,13 +301,13 @@
         option.textContent = name;
         microphone.add(option);
       }
-      microphone.value = String(settings.index);
-      if (settings.provider === 'openai-compatible') document.querySelector('[value="openai-compatible"]').checked = true;
-      endpoint.value = settings.endpoint;
+      microphone.value = String(settings.microphoneIndex);
+      document.querySelector(`[name="engine"][value="${settings.engine}"]`).checked = true;
+      endpoint.value = settings.remoteEndpoint;
       remoteModel.value = settings.remoteModel;
-      setKey(holdKey, settings.shortcut);
-      setKey(toggleKey, settings.toggleShortcut);
-      document.getElementById('hold-label').textContent = settings.shortcut;
+      setKey(holdKey, settings.holdKey);
+      setKey(toggleKey, settings.toggleKey);
+      document.getElementById('hold-label').textContent = settings.holdKey;
       renderModels();
       showStep(0);
       checkPermissions();
@@ -378,7 +433,7 @@
         activeDownload = null;
         status.textContent = payload.error || `${payload.id}: ${payload.state}`;
         try {
-          models = await invoke('model_catalog');
+          models = (await invoke('catalog')).whisper;
           renderModels();
         } catch (error) {
           status.textContent = String(error);

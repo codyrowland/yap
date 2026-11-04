@@ -61,6 +61,15 @@ pub fn installed(model: &Model, directory: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.len() == model.bytes)
 }
 
+/// Deletes a downloaded model file. Missing files are not an error.
+pub fn remove(model: &Model, directory: &Path) -> Result<(), String> {
+    match fs::remove_file(directory.join(model.filename)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn verify(file: &mut File, expected: &str) -> Result<(), String> {
     let mut hasher = Sha256::new();
     std::io::copy(file, &mut hasher).map_err(|error| error.to_string())?;

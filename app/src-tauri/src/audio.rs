@@ -3,12 +3,13 @@ use std::sync::{Arc, Mutex, mpsc};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 
-const MAX_SECONDS: usize = 30;
+/// Longest single recording. Toggle dictation is meant for longer passages;
+/// when the limit is reached the recording stops and is transcribed.
+pub const MAX_SECONDS: usize = 300;
 
 pub struct Recording {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
-    pub limited: bool,
 }
 
 impl Recording {
@@ -56,10 +57,13 @@ struct AudioBuffer {
     channels: usize,
     max_frames: usize,
     limited: bool,
+    /// RMS of the most recent callback, for the overlay's level meter.
+    level: f32,
 }
 
 impl AudioBuffer {
     fn append<T: Copy>(&mut self, data: &[T], convert: fn(T) -> f32) {
+        let start = self.samples.len();
         for frame in data.chunks_exact(self.channels) {
             if self.samples.len() >= self.max_frames {
                 self.limited = true;
@@ -69,6 +73,13 @@ impl AudioBuffer {
             let mono =
                 frame.iter().map(|sample| convert(*sample)).sum::<f32>() / self.channels as f32;
             self.samples.push(mono);
+        }
+
+        let recent = &self.samples[start..];
+        if !recent.is_empty() {
+            self.level = (recent.iter().map(|sample| sample * sample).sum::<f32>()
+                / recent.len() as f32)
+                .sqrt();
         }
     }
 }
@@ -133,6 +144,7 @@ impl Capture {
             channels: 1,
             max_frames: 16_000 * MAX_SECONDS,
             limited: false,
+            level: 0.0,
         };
         let samples = match kind {
             Fixture::Speech | Fixture::CaptureError | Fixture::InferenceError => vec![0.02; 3_200],
@@ -167,6 +179,7 @@ impl Capture {
             channels: config.channels as usize,
             max_frames: config.sample_rate.0 as usize * MAX_SECONDS,
             limited: false,
+            level: 0.0,
         }));
         let (errors, error_receiver) = mpsc::channel();
         let stream = match supported.sample_format() {
@@ -194,6 +207,14 @@ impl Capture {
         })
     }
 
+    /// Current input level (RMS, 0–1) and whether the length limit was hit.
+    pub fn meter(&self) -> (f32, bool) {
+        self.buffer
+            .lock()
+            .map(|buffer| (buffer.level, buffer.limited))
+            .unwrap_or((0.0, false))
+    }
+
     pub fn stop(self) -> Result<Recording, String> {
         drop(self.stream);
         if let Ok(error) = self.errors.try_recv() {
@@ -204,7 +225,6 @@ impl Capture {
         Ok(Recording {
             samples: std::mem::take(&mut buffer.samples),
             sample_rate: self.sample_rate,
-            limited: buffer.limited,
         })
     }
 }
@@ -220,10 +240,12 @@ mod tests {
             channels: 2,
             max_frames: 2,
             limited: false,
+            level: 0.0,
         };
         buffer.append(&[1.0_f32, -1.0, 0.5, 0.5, 0.7, 0.7], |sample| sample);
         assert_eq!(buffer.samples, vec![0.0, 0.5]);
         assert!(buffer.limited);
+        assert!((buffer.level - 0.125_f32.sqrt()).abs() < 1e-6);
     }
 
     #[test]
@@ -243,13 +265,11 @@ mod tests {
         let recording = Recording {
             samples: vec![1.0, 1.0, 1.0, -1.0, -1.0, -1.0],
             sample_rate: 48_000,
-            limited: false,
         };
         assert_eq!(recording.normalized_16k(), vec![1.0, -1.0]);
         let recording = Recording {
             samples: vec![0.0, 1.0],
             sample_rate: 8_000,
-            limited: false,
         };
         assert_eq!(recording.normalized_16k(), vec![0.0, 0.5, 1.0, 1.0]);
     }
@@ -268,6 +288,7 @@ mod tests {
             channels: 2,
             max_frames: 5,
             limited: false,
+            level: 0.0,
         };
         buffer.append(&[2_i16, 4, 9], |sample| sample as f32);
         assert_eq!(buffer.samples, vec![3.0]);

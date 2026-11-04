@@ -208,6 +208,21 @@ impl KeyState {
     }
 }
 
+impl KeyState {
+    fn request_stop(&mut self) -> bool {
+        if !self.active || !(self.held || self.toggle_active) {
+            return false;
+        }
+
+        if self.held {
+            self.held = false;
+            self.suppress_release = true;
+        }
+        self.toggle_active = false;
+        true
+    }
+}
+
 static KEY_STATE: OnceLock<Mutex<KeyState>> = OnceLock::new();
 static SENDER: OnceLock<mpsc::Sender<Event>> = OnceLock::new();
 
@@ -524,6 +539,35 @@ pub fn finish() {
     }
 }
 
+/// Whether the active recording was started with the toggle key (it keeps
+/// running until stopped) rather than the hold key.
+pub fn toggle_active() -> bool {
+    KEY_STATE
+        .get()
+        .and_then(|state| state.lock().ok())
+        .is_some_and(|state| state.active && state.toggle_active)
+}
+
+/// Ends the active recording as if the talk key had been released: used by
+/// the overlay's Stop button and when the recording reaches its length
+/// limit. A hold key that is still down is ignored until it is let go.
+pub fn request_stop() -> bool {
+    let Some(state) = KEY_STATE.get() else {
+        return false;
+    };
+    let Ok(mut state) = state.lock() else {
+        return false;
+    };
+    if !state.request_stop() {
+        return false;
+    }
+
+    drop(state);
+    SENDER
+        .get()
+        .is_some_and(|sender| sender.send(Event::Released).is_ok())
+}
+
 pub struct Hotkey {
     running: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -592,6 +636,36 @@ mod tests {
     use super::*;
 
     const F8: u32 = 0x77;
+
+    #[test]
+    fn request_stop_ends_hold_or_toggle_once_and_swallows_the_hold_key_up() {
+        let mut state = KeyState {
+            shortcut: shortcut_code("F8").unwrap(),
+            ..KeyState::default()
+        };
+        assert!(!state.request_stop());
+        assert_eq!(
+            state.handle(F8, true, false),
+            (true, Some(Event::Pressed(0)))
+        );
+        assert!(state.request_stop());
+        assert!(!state.request_stop());
+        assert_eq!(state.handle(F8, false, true), (true, None));
+
+        let toggle = shortcut_code("Ctrl+Shift+Space").unwrap();
+        state.active = false;
+        state.toggle_shortcut = toggle;
+        for key in [0xA2, 0xA0] {
+            state.handle(key, true, false);
+        }
+        assert_eq!(
+            state.handle(0x20, true, false),
+            (true, Some(Event::Pressed(0)))
+        );
+        assert!(state.toggle_active);
+        assert!(state.request_stop());
+        assert!(!state.toggle_active);
+    }
 
     #[test]
     fn hold_release_cancel_and_busy_press_are_distinct() {

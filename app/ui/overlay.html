@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Yap recording</title>
+  <link rel="stylesheet" href="classical.css">
+  <style>
+    html, body { background: transparent; overflow: hidden; }
+    .bar { width: 100vw; height: 100vh; position: relative; display: flex; align-items: center; gap: 14px; padding: 0 8px 0 16px;
+      background: var(--color-text); color: var(--color-bg); overflow: hidden; user-select: none; }
+    .bar.error { background: var(--color-accent); }
+    .rec { width: 10px; height: 10px; flex: none; background: var(--color-accent); animation: blink 1s ease-in-out infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+    .wave { display: flex; align-items: center; gap: 3px; height: 32px; }
+    .wave span { width: 3px; height: 4px; background: var(--color-bg); transition: height 60ms linear; }
+    .label { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .time, .detail { font-size: 13px; font-variant-numeric: tabular-nums; opacity: .7; white-space: nowrap; }
+    .detail { font-size: 12px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+    .scan { position: absolute; left: 0; bottom: 0; height: 3px; width: 40%; background: var(--color-accent); animation: scan 1.2s linear infinite; }
+    @keyframes scan { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+    .bar .btn { font-size: 13px; padding: 6px 12px; }
+    .stop { color: var(--color-text); background: var(--color-bg); }
+    .outline { color: var(--color-bg); border-color: color-mix(in srgb, var(--color-bg) 35%, transparent); }
+    .outline:hover { background: color-mix(in srgb, var(--color-bg) 12%, transparent); }
+  </style>
+</head>
+<body>
+  <div class="bar" id="bar">
+    <span class="rec" id="rec"></span>
+    <svg id="cpu" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+    <svg id="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <svg id="warn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <div class="wave" id="wave"></div>
+    <span class="label" id="label"></span>
+    <span class="detail" id="detail"></span>
+    <span class="time" id="time"></span>
+    <button class="btn stop" id="stop" type="button">Stop</button>
+    <button class="btn outline" id="undo" type="button">Undo</button>
+    <span class="scan" id="scan"></span>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+    const $ = id => document.getElementById(id);
+    const BARS = 20;
+    const levels = new Array(BARS).fill(0);
+    for (let i = 0; i < BARS; i++) $('wave').append(document.createElement('span'));
+    let started = 0;
+    let ticker = null;
+
+    const show = (ids, on) => ids.forEach(id => $(id).toggleAttribute('hidden', !on));
+    const all = ['rec', 'cpu', 'check', 'warn', 'wave', 'detail', 'time', 'stop', 'undo', 'scan'];
+
+    function tick() {
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      $('time').textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    }
+
+    function render(state) {
+      clearInterval(ticker);
+      show(all, false);
+      $('bar').classList.toggle('error', state.state === 'error');
+      $('detail').textContent = '';
+      if (state.state === 'recording') {
+        started = Date.now();
+        levels.fill(0);
+        show(['rec', 'wave', 'time'], true);
+        $('label').textContent = state.toggle ? '' : 'Release to insert';
+        $('label').style.flex = state.toggle ? '0' : '1';
+        $('time').style.flex = state.toggle ? '1' : '';
+        show(['stop'], state.toggle);
+        tick();
+        ticker = setInterval(tick, 250);
+      } else if (state.state === 'transcribing') {
+        show(['cpu', 'detail', 'scan'], true);
+        $('label').style.flex = '1';
+        $('label').textContent = 'Transcribing';
+        $('detail').textContent = state.model ? `${state.engine} · ${state.model}` : state.engine;
+      } else if (state.state === 'done') {
+        show(['check', 'undo'], true);
+        $('label').style.flex = '1';
+        $('label').textContent = `Inserted ${state.words} word${state.words === 1 ? '' : 's'} into ${state.app}`;
+      } else if (state.state === 'error') {
+        show(['warn'], true);
+        $('label').style.flex = '1';
+        $('label').textContent = state.message;
+        $('label').title = state.message;
+      }
+    }
+
+    listen('overlay-state', ({ payload }) => render(payload));
+    listen('overlay-level', ({ payload }) => {
+      // Scale RMS (speech is roughly 0.01–0.2) to 0–1 with a soft curve.
+      levels.shift();
+      levels.push(Math.min(1, Math.sqrt(payload * 8)));
+      $('wave').childNodes.forEach((bar, i) => { bar.style.height = `${4 + levels[i] * 28}px`; });
+    });
+    $('stop').onclick = () => invoke('overlay_stop').catch(() => {});
+    $('undo').onclick = () => invoke('overlay_undo').catch(() => {});
+    render({ state: 'hidden' });
+  </script>
+</body>
+</html>

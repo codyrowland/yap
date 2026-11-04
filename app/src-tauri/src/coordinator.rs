@@ -2,13 +2,18 @@ use std::time::{Duration, Instant};
 
 use crate::speech::SpeechConfig;
 
-const RECORDING_LIMIT: Duration = Duration::from_secs(30);
-const TRANSCRIPTION_LIMIT: Duration = Duration::from_secs(30);
+/// A little longer than the audio capture limit (`audio::MAX_SECONDS`), which
+/// stops the recording itself; this only guards against a lost release.
+const RECORDING_LIMIT: Duration = Duration::from_secs(330);
+/// Long recordings take longer to upload or run locally.
+const TRANSCRIPTION_LIMIT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settings {
     pub microphone_index: usize,
     pub speech: SpeechConfig,
+    /// ISO-639-1 code, or `None` to auto-detect.
+    pub language: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,6 +197,7 @@ mod tests {
                 model_id: "base".to_owned(),
                 artifact: "local-model.bin".into(),
             },
+            language: None,
         }
     }
 
@@ -276,7 +282,7 @@ mod tests {
         let old = coordinator.start(settings(), "old", now).unwrap();
         assert!(
             coordinator
-                .release(old, true, now + TRANSCRIPTION_LIMIT)
+                .release(old, true, now + RECORDING_LIMIT)
                 .is_none()
         );
         let current = coordinator.start(settings(), "current", now).unwrap();
