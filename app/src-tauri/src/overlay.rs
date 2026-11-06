@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
-use crate::state::{SessionState, Target};
+use crate::state::{SessionState, SharedSettings, Target};
 use crate::{hotkey, platform_input};
 
 pub const LABEL: &str = "overlay";
@@ -43,14 +43,8 @@ pub enum Overlay {
     Hidden,
 }
 
-/// Never waits for the session lock: if a caller already holds it (or it is
-/// busy), the overlay is shown rather than risking a deadlock.
 fn enabled(app: &AppHandle) -> bool {
-    match app.state::<SessionState>().try_lock() {
-        Ok(session) => session.settings.show_overlay,
-        Err(std::sync::TryLockError::WouldBlock) => true,
-        Err(std::sync::TryLockError::Poisoned(_)) => false,
-    }
+    app.state::<SharedSettings>().get().show_overlay
 }
 
 /// Bottom-centre of the monitor the user is working on (the one under the
@@ -198,16 +192,8 @@ fn current() -> u64 {
 /// the recording ends. Stops the recording when it reaches the length limit.
 pub fn track_recording(app: &AppHandle, id: u64) {
     bump();
-    let (hold_key, toggle_key) = app
-        .state::<SessionState>()
-        .lock()
-        .map(|session| {
-            (
-                session.settings.hold_key.clone(),
-                session.settings.toggle_key.clone(),
-            )
-        })
-        .unwrap_or_default();
+    let settings = app.state::<SharedSettings>().get();
+    let (hold_key, toggle_key) = (settings.hold_key.clone(), settings.toggle_key.clone());
     let toggle = hotkey::toggle_active();
     show(
         app,

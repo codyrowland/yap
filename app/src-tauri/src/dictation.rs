@@ -14,7 +14,7 @@ use yap_app::speech::{self, SpeechConfig};
 
 use crate::overlay::{self, Overlay};
 use crate::platform_input::{self, Verifier};
-use crate::state::{SessionState, Target, lock};
+use crate::state::{SessionState, SharedSettings, Target, lock};
 use crate::{audio, clipboard, hotkey, own_window};
 
 /// Tells the settings window (and onboarding) what happened.
@@ -157,8 +157,10 @@ pub fn begin_recording(
         return Err("Dictation is already active or exiting".to_owned());
     }
 
+    // Read under the session lock: settings only change while it is held.
+    let settings = app.state::<SharedSettings>().get();
     #[cfg_attr(not(all(debug_assertions, feature = "input-test")), allow(unused_mut))]
-    let mut speech = speech_config(&session.settings);
+    let mut speech = speech_config(&settings);
     #[cfg(all(debug_assertions, feature = "input-test"))]
     if crate::input_test::active() {
         let model_id = if matches!(session.test_audio, audio::Fixture::InferenceError) {
@@ -173,9 +175,9 @@ pub fn begin_recording(
         });
     }
     let job = JobSettings {
-        microphone_index: session.settings.microphone_index,
+        microphone_index: settings.microphone_index,
         speech: speech?,
-        language: session.settings.language_code(),
+        language: settings.language_code(),
     };
     let index = job.microphone_index;
     let live = job
@@ -360,7 +362,8 @@ pub async fn stop_recording(
             .cancel_flag(id)
             .ok_or("No recording is active")?;
         let capture = session.capture.take().ok_or("No recording is active")?;
-        (id, capture, cancelled, session.settings.cleanup_enabled)
+        let cleanup = app.state::<SharedSettings>().get().cleanup_enabled;
+        (id, capture, cancelled, cleanup)
     };
     let recording = capture.stop();
     // A recording that hit the length limit is still transcribed: the limit
@@ -692,7 +695,7 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
             platform_input::modifiers_released(),
         );
         let decision = session.coordinator.begin_insert(id, safe);
-        (decision, session.settings.insertion)
+        (decision, app.state::<SharedSettings>().get().insertion)
     };
     let Decision::Insert {
         destination: Some(Target::App(destination)),

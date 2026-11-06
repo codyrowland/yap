@@ -34,10 +34,9 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use yap_app::history::History;
-use yap_app::settings::Settings;
 
 use platform_input::Verifier;
-use state::{Session, SessionState};
+use state::{Session, SessionState, SharedSettings};
 
 pub fn shutdown(app: &AppHandle) {
     if let Ok(mut session) = app.state::<SessionState>().lock() {
@@ -84,7 +83,8 @@ fn main() {
         // deaf inside Yap (wry #1761, tauri #13919). We don't use device
         // events, so turn the registration off.
         .device_event_filter(tauri::DeviceEventFilter::Always)
-        .manage(Arc::new(Mutex::new(Session::new(Settings::default()))))
+        .manage(Arc::new(Mutex::new(Session::new())))
+        .manage(SharedSettings::default())
         .manage(Arc::new(Mutex::new(Verifier::start())))
         .manage(Arc::new(Mutex::new(None::<(String, Arc<AtomicBool>)>)))
         .invoke_handler(tauri::generate_handler![
@@ -143,10 +143,7 @@ fn main() {
                 dictation::preload(&settings);
                 assistant::sync(app.handle(), &settings);
             }
-            app.state::<SessionState>()
-                .lock()
-                .map_err(|error| std::io::Error::other(error.to_string()))?
-                .settings = settings;
+            app.state::<SharedSettings>().set(settings);
 
             #[cfg(all(debug_assertions, feature = "input-test"))]
             if input_test::active() {

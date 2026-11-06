@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use yap_app::settings::Settings;
 
-use crate::state::{SessionState, lock};
+use crate::state::{SessionState, SharedSettings, lock};
 use crate::{audio, autostart, hotkey};
 
 const SETTINGS_FILE: &str = "settings.json";
@@ -87,13 +87,14 @@ pub fn load(app: &AppHandle) -> Result<Settings, String> {
     Ok(settings)
 }
 
-/// Validates, persists and activates new settings. Rejected while dictating.
+/// Validates, persists and activates new settings. Rejected while dictating;
+/// holding the session lock keeps a dictation from starting meanwhile.
 pub fn apply(
     app: &AppHandle,
     session: &SessionState,
     mut next: Settings,
 ) -> Result<Settings, String> {
-    let mut session = lock(session)?;
+    let session = lock(session)?;
     if !session.idle() {
         return Err("Cannot change settings while dictating or exiting".to_owned());
     }
@@ -109,6 +110,8 @@ pub fn apply(
             ));
         }
     }
+    let shared = app.state::<SharedSettings>();
+    let current = shared.get();
     // With no microphone plugged in, other settings can still change; the
     // saved microphone name is kept so it is found again when reconnected.
     let names = audio::microphones().unwrap_or_default();
@@ -119,20 +122,20 @@ pub fn apply(
                 .cloned()
                 .ok_or("Microphone is no longer available")?,
         );
-    } else if next.microphone_index != session.settings.microphone_index {
+    } else if next.microphone_index != current.microphone_index {
         return Err("No microphone is connected".to_owned());
     }
     let directory = config_dir(app)?;
     hotkey::update_shortcut(&next.hold_key, &next.toggle_key, || {
         write_settings(&directory, &next)
     })?;
-    if next.open_at_login != session.settings.open_at_login
+    if next.open_at_login != current.open_at_login
         && let Err(error) = autostart::set(next.open_at_login)
     {
         // Keep the rest of the change; report that this part failed.
-        next.open_at_login = session.settings.open_at_login;
+        next.open_at_login = current.open_at_login;
         let _ = write_settings(&directory, &next);
-        session.settings = next;
+        shared.set(next);
         drop(session);
         let _ = app.emit("settings-changed", ());
         return Err(error);
@@ -142,7 +145,7 @@ pub fn apply(
         "settings saved: engine={:?} hold={} toggle={} clean-up={}",
         next.engine, next.hold_key, next.toggle_key, next.cleanup_enabled
     ));
-    session.settings = next.clone();
+    shared.set(next.clone());
     drop(session);
     crate::dictation::preload(&next);
     crate::assistant::sync(app, &next);

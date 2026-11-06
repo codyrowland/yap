@@ -1,12 +1,12 @@
 //! First-run setup (design 2a): permission checks, engine setup and talk
 //! keys. The "Try it" step uses normal dictation into its own text box.
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use yap_app::settings::Engine;
 
 use crate::config;
 use crate::dictation::speech_config;
-use crate::state::{SessionState, lock};
+use crate::state::{SessionState, SharedSettings, lock};
 use crate::{audio, platform_input};
 
 #[tauri::command]
@@ -59,17 +59,17 @@ fn finish_onboarding(session: &SessionState, app: &AppHandle) -> Result<(), Stri
         return Err("Finish the recording before completing setup".to_owned());
     }
 
-    if session.settings.engine == Engine::Local
-        && !session
-            .settings
+    let settings = app.state::<SharedSettings>().get();
+    if settings.engine == Engine::Local
+        && !settings
             .local_model_path
             .as_ref()
             .is_some_and(|path| yap_app::models::path_installed(std::path::Path::new(path)))
     {
         return Err("Select a downloaded model before finishing".to_owned());
     }
-    session.settings.validate()?;
-    speech_config(&session.settings)?;
+    settings.validate()?;
+    speech_config(&settings)?;
 
     drop(session);
     match std::fs::remove_file(config::onboarding_path(app)?) {

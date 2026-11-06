@@ -14,7 +14,7 @@ use yap_app::speech::openai_compatible::OpenAiCompatible;
 use yap_app::{credential_store, models};
 
 use crate::config;
-use crate::state::{ModelDownloadState, SessionState, lock};
+use crate::state::{ModelDownloadState, SessionState, SharedSettings, lock};
 use crate::{audio, hotkey};
 
 // ---------- Settings ----------
@@ -25,8 +25,8 @@ pub fn microphones() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn current_settings(session: State<'_, SessionState>) -> Result<Settings, String> {
-    Ok(lock(&session)?.settings.clone())
+pub fn current_settings(settings: State<'_, SharedSettings>) -> Result<Settings, String> {
+    Ok(Settings::clone(&settings.get()))
 }
 
 /// Saves the full settings object. The UI always sends every field, so a
@@ -138,9 +138,9 @@ fn credential_target(kind: &str, provider: &str, settings: &Settings) -> Result<
 pub fn credential_status(
     kind: String,
     provider: String,
-    session: State<'_, SessionState>,
+    settings: State<'_, SharedSettings>,
 ) -> Result<bool, String> {
-    let target = credential_target(&kind, &provider, &lock(&session)?.settings)?;
+    let target = credential_target(&kind, &provider, &settings.get())?;
     Ok(credential_store::read(&target)?.is_some())
 }
 
@@ -151,13 +151,14 @@ pub fn update_credential(
     provider: String,
     secret: Option<String>,
     session: State<'_, SessionState>,
+    settings: State<'_, SharedSettings>,
 ) -> Result<(), String> {
     let session = lock(&session)?;
     if !session.idle() {
         return Err("Cannot change credentials while dictating or exiting".to_owned());
     }
 
-    let target = credential_target(&kind, &provider, &session.settings)?;
+    let target = credential_target(&kind, &provider, &settings.get())?;
     match secret.map(|secret| secret.trim().to_owned()) {
         Some(secret) if !secret.is_empty() => credential_store::write(&target, &secret),
         Some(_) => Err("Enter a key first".to_owned()),
@@ -169,9 +170,9 @@ pub fn update_credential(
 #[tauri::command]
 pub async fn test_connection(
     kind: String,
-    session: State<'_, SessionState>,
+    settings: State<'_, SharedSettings>,
 ) -> Result<u64, String> {
-    let settings = lock(&session)?.settings.clone();
+    let settings = settings.get();
     tauri::async_runtime::spawn_blocking(move || {
         let provider = match kind.as_str() {
             "cloud" => OpenAiCompatible::cloud(
@@ -299,13 +300,11 @@ pub fn delete_model(
     let path = models::path(model, &directory)
         .to_string_lossy()
         .into_owned();
-    let settings = {
-        let session = lock(&session)?;
-        if !session.idle() {
-            return Err("Cannot delete a model while dictating".to_owned());
-        }
-        session.settings.clone()
-    };
+    if !lock(&session)?.idle() {
+        return Err("Cannot delete a model while dictating".to_owned());
+    }
+
+    let settings = Settings::clone(&app.state::<SharedSettings>().get());
     if settings.local_model_path.as_deref() == Some(path.as_str()) {
         if settings.engine == Engine::Local {
             return Err("Choose another model before deleting the one in use".to_owned());
@@ -434,17 +433,16 @@ pub fn download_cleanup(
 pub fn delete_cleanup(
     id: String,
     app: AppHandle,
-    session: State<'_, SessionState>,
+    settings: State<'_, SharedSettings>,
 ) -> Result<(), String> {
     let model = yap_app::cleanup::model(&id).ok_or("Unknown clean-up model")?;
-    {
-        let session = lock(&session)?;
-        if session.settings.cleanup_enabled && session.settings.cleanup_model == model.id {
-            return Err(
-                "Turn off clean-up or pick the other model before deleting this one".to_owned(),
-            );
-        }
+    let settings = settings.get();
+    if settings.cleanup_enabled && settings.cleanup_model == model.id {
+        return Err(
+            "Turn off clean-up or pick the other model before deleting this one".to_owned(),
+        );
     }
+
     yap_app::cleanup::remove(model, &config::models_path(&app)?)
 }
 
@@ -532,19 +530,23 @@ fn engine_choices(settings: &Settings) -> Vec<EngineChoice> {
 }
 
 #[tauri::command]
-pub fn tray_state(session: State<'_, SessionState>) -> Result<TrayState, String> {
-    let session = lock(&session)?;
-    let status = match session.coordinator.phase() {
+pub fn tray_state(
+    session: State<'_, SessionState>,
+    settings: State<'_, SharedSettings>,
+) -> Result<TrayState, String> {
+    let phase = lock(&session)?.coordinator.phase();
+    let settings = settings.get();
+    let status = match phase {
         Phase::Idle => "Ready",
         Phase::Recording => "Listening",
         Phase::Transcribing | Phase::Ready | Phase::Inserting => "Transcribing",
     };
     Ok(TrayState {
         status,
-        hold_key: session.settings.hold_key.clone(),
-        toggle_key: session.settings.toggle_key.clone(),
-        engine: session.settings.engine,
-        engines: engine_choices(&session.settings),
+        hold_key: settings.hold_key.clone(),
+        toggle_key: settings.toggle_key.clone(),
+        engine: settings.engine,
+        engines: engine_choices(&settings),
     })
 }
 
@@ -554,7 +556,7 @@ pub fn set_engine(
     session: State<'_, SessionState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let settings = lock(&session)?.settings.clone();
+    let settings = Settings::clone(&app.state::<SharedSettings>().get());
     let label = match engine {
         Engine::Local => "an on-device model",
         Engine::Cloud => "a cloud provider",
