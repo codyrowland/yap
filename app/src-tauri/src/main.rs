@@ -9,7 +9,8 @@
 //! - `onboarding`  first-run setup (design 2a)
 //! - `own_window`  dictation into Yap's own window
 //! - `commands`    Settings / History / tray window commands
-//! - `hotkey`, `platform_input`, `clipboard`, `audio`, `autostart`: Windows I/O
+//! - `talk_key_state` talk-key state shared with the platform keyboard hook
+//! - `platform`, `platform_input`, `clipboard`, `audio`, `autostart`: OS I/O
 
 mod assistant;
 mod audio;
@@ -18,15 +19,16 @@ mod clipboard;
 mod commands;
 mod config;
 mod dictation;
-mod hotkey;
 #[cfg(all(debug_assertions, feature = "input-test"))]
 mod input_test;
 mod logfile;
 mod onboarding;
 mod overlay;
 mod own_window;
+mod platform;
 mod platform_input;
 mod state;
+mod talk_key_state;
 mod tray;
 
 use std::sync::atomic::AtomicBool;
@@ -45,7 +47,7 @@ pub fn shutdown(app: &AppHandle) {
     if let Ok(verifier) = app.state::<Arc<Mutex<Verifier>>>().lock() {
         verifier.cancel();
     }
-    hotkey::finish();
+    talk_key_state::finish();
     overlay::hide(app);
     assistant::stop();
     app.exit(0);
@@ -151,7 +153,7 @@ fn main() {
             }
 
             let (hook, events) =
-                hotkey::start(&hold_key, &toggle_key).map_err(std::io::Error::other)?;
+                talk_key_state::start(&hold_key, &toggle_key).map_err(std::io::Error::other)?;
             app.manage(Mutex::new(Some(hook)));
             logfile::write(&format!(
                 "talk keys installed: hold={hold_key} toggle={toggle_key}"
@@ -160,7 +162,7 @@ fn main() {
             if input_test::active() {
                 println!("YAP_TEST hotkey_ready");
             }
-            dictation::run_hotkey_events(app.handle().clone(), events);
+            dictation::run_talk_key_events(app.handle().clone(), events);
 
             if autostart::launched_in_background()
                 && let Some(window) = app.get_webview_window("main")
@@ -172,7 +174,7 @@ fn main() {
         .on_window_event(|window, event| match window.label() {
             "main" => {
                 if let WindowEvent::CloseRequested { api, .. } = event {
-                    let _ = hotkey::cancel_capture();
+                    let _ = talk_key_state::cancel_capture();
                     api.prevent_close();
                     let _ = window.hide();
                 }

@@ -15,7 +15,7 @@ use yap_app::{credential_store, models};
 
 use crate::config;
 use crate::state::{ModelDownloadState, SessionState, SharedSettings, lock};
-use crate::{audio, hotkey};
+use crate::{audio, talk_key_state};
 
 // ---------- Settings ----------
 
@@ -101,18 +101,18 @@ pub fn catalog(app: AppHandle) -> Result<Catalog, String> {
 #[tauri::command]
 pub fn begin_key_capture(kind: String) -> Result<(), String> {
     crate::logfile::write(&format!("key capture started ({kind})"));
-    hotkey::begin_capture(&kind)
+    talk_key_state::begin_capture(&kind)
 }
 
 #[tauri::command]
 pub fn cancel_key_capture() -> Result<(), String> {
     crate::logfile::write("key capture cancelled");
-    hotkey::cancel_capture()
+    talk_key_state::cancel_capture()
 }
 
 #[tauri::command]
 pub fn complete_key_capture(kind: String, shortcut: String) -> Result<(), String> {
-    let result = hotkey::complete_capture(&kind, &shortcut);
+    let result = talk_key_state::complete_capture(&kind, &shortcut);
     crate::logfile::write(&format!(
         "key capture saved ({kind}: {shortcut}): {result:?}"
     ));

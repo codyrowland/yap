@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use yap_app::settings::Settings;
 
 use crate::state::{SessionState, SharedSettings, lock};
-use crate::{audio, autostart, hotkey};
+use crate::{audio, autostart, talk_key_state};
 
 const SETTINGS_FILE: &str = "settings.json";
 const LEGACY_SETTINGS_FILE: &str = "settings.txt";
@@ -44,7 +44,7 @@ fn read_settings(directory: &Path) -> Result<Settings, String> {
     match std::fs::read_to_string(directory.join(LEGACY_SETTINGS_FILE)) {
         Ok(text) => {
             let settings = Settings::from_legacy(&text)?;
-            hotkey::validate_shortcuts(&settings.hold_key, &settings.toggle_key)?;
+            talk_key_state::validate(&settings.hold_key, &settings.toggle_key)?;
             write_settings(directory, &settings)?;
             // The old file is left in place (harmless, and lets an older build
             // still start); settings.json takes precedence from now on.
@@ -68,7 +68,7 @@ fn write_settings(directory: &Path, settings: &Settings) -> Result<(), String> {
 /// microphone by name, since device order can change between runs.
 pub fn load(app: &AppHandle) -> Result<Settings, String> {
     let mut settings = read_settings(&config_dir(app)?)?;
-    hotkey::validate_shortcuts(&settings.hold_key, &settings.toggle_key)?;
+    talk_key_state::validate(&settings.hold_key, &settings.toggle_key)?;
     let names = audio::microphones().unwrap_or_default();
     let index = settings
         .microphone_name
@@ -126,7 +126,7 @@ pub fn apply(
         return Err("No microphone is connected".to_owned());
     }
     let directory = config_dir(app)?;
-    hotkey::update_shortcut(&next.hold_key, &next.toggle_key, || {
+    talk_key_state::update_shortcut(&next.hold_key, &next.toggle_key, || {
         write_settings(&directory, &next)
     })?;
     if next.open_at_login != current.open_at_login

@@ -17,11 +17,11 @@ use yap_app::coordinator::Settings as JobSettings;
 use crate::overlay::{self, Overlay};
 use crate::platform_input::Verifier;
 use crate::state::{SessionState, SharedSettings, Target, lock};
-use crate::{audio, hotkey};
+use crate::{audio, talk_key_state};
 
 pub use engines::{preload, unload};
 pub use insert::insert_transcript;
-pub use keys::run_hotkey_events;
+pub use keys::run_talk_key_events;
 
 /// Tells the settings window (and onboarding) what happened.
 pub fn notify(app: &AppHandle, message: impl Into<String>) {
@@ -259,7 +259,7 @@ fn fail(app: &AppHandle, message: String) {
     if let Ok(verifier) = app.state::<Arc<Mutex<Verifier>>>().lock() {
         verifier.cancel();
     }
-    hotkey::finish();
+    talk_key_state::finish();
     if message == "Cancelled" {
         return;
     }

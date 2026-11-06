@@ -12,7 +12,7 @@ use super::{history, notify};
 use crate::overlay::{self, Overlay};
 use crate::platform_input::{self, Destination, Verifier};
 use crate::state::{SessionState, SharedSettings, Target};
-use crate::{clipboard, hotkey, own_window};
+use crate::{clipboard, own_window, talk_key_state};
 
 /// A finished insertion, for the overlay and History.
 struct Inserted {
@@ -34,7 +34,7 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
     };
     // `None`: the dictation was cancelled or Yap is exiting; say nothing.
     let Some(result) = result else {
-        hotkey::finish();
+        talk_key_state::finish();
         return false;
     };
     crate::logfile::write(&format!(
@@ -60,10 +60,10 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
                 },
             );
             history::save(&app, app_name, text, info);
-            hotkey::finish();
+            talk_key_state::finish();
         }
         Err(message) => {
-            hotkey::finish();
+            talk_key_state::finish();
             overlay::flash(
                 &app,
                 Overlay::Error {

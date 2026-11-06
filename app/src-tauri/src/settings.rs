@@ -181,7 +181,7 @@ impl Settings {
     }
 
     /// Checks values that do not depend on the platform. Talk-key syntax is
-    /// validated by the hotkey module, which owns the key tables.
+    /// validated by `talk_keys`, with the platform's reserved shortcuts.
     pub fn validate(&self) -> Result<(), String> {
         if !LANGUAGES.iter().any(|(code, _)| *code == self.language) {
             return Err("Unsupported spoken language".to_owned());

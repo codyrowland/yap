@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
 use crate::state::{SessionState, SharedSettings, Target};
-use crate::{hotkey, platform_input};
+use crate::{platform_input, talk_key_state};
 
 pub const LABEL: &str = "overlay";
 const WIDTH: f64 = 440.0;
@@ -209,7 +209,7 @@ pub fn track_recording(app: &AppHandle, id: u64) {
     bump();
     let settings = app.state::<SharedSettings>().get();
     let (hold_key, toggle_key) = (settings.hold_key.clone(), settings.toggle_key.clone());
-    let toggle = hotkey::toggle_active();
+    let toggle = talk_key_state::toggle_active();
     show(
         app,
         Overlay::Recording {
@@ -236,7 +236,7 @@ pub fn track_recording(app: &AppHandle, id: u64) {
             };
             let _ = app.emit_to(LABEL, "overlay-level", meter.0);
             if meter.1 {
-                hotkey::request_stop();
+                talk_key_state::request_stop();
                 return;
             }
         }
@@ -245,7 +245,7 @@ pub fn track_recording(app: &AppHandle, id: u64) {
 
 #[tauri::command]
 pub fn overlay_stop() -> Result<(), String> {
-    if hotkey::request_stop() {
+    if talk_key_state::request_stop() {
         Ok(())
     } else {
         Err("No recording to stop".to_owned())
