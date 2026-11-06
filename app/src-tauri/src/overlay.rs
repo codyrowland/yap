@@ -97,11 +97,26 @@ pub fn show(app: &AppHandle, state: Overlay) {
 /// visibility never disagrees with what is on screen.
 #[cfg(windows)]
 fn set_visible(window: &tauri::WebviewWindow, visible: bool) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SetWindowPos, ShowWindow,
+    };
     let Ok(hwnd) = window.hwnd() else {
         return;
     };
     unsafe {
+        if visible {
+            SetWindowPos(
+                hwnd.0,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+
         ShowWindow(hwnd.0, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
 }
