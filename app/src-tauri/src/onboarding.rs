@@ -33,8 +33,8 @@ pub struct PermissionStatus {
 }
 
 #[tauri::command]
-pub fn onboarding_permissions(index: usize) -> PermissionStatus {
-    let microphone = audio::Capture::start(index).map(drop);
+pub fn onboarding_permissions(index: usize, app: AppHandle) -> PermissionStatus {
+    let microphone = app.state::<audio::MicrophoneState>().start(index).map(drop);
     PermissionStatus {
         microphone: microphone.is_ok(),
         microphone_error: microphone.err(),

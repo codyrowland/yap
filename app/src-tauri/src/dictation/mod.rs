@@ -19,9 +19,10 @@ use crate::platform::FieldWatch;
 use crate::state::{SessionState, SharedSettings, Target, lock};
 use crate::{audio, talk_key_state};
 
-pub use engines::{preload, unload};
+pub use engines::{Engines, preload, unload};
 pub use insert::insert_transcript;
 pub use keys::run_talk_key_events;
+pub use live::LiveState;
 
 /// Tells the settings window (and onboarding) what happened.
 pub fn notify(app: &AppHandle, message: impl Into<String>) {
@@ -43,24 +44,9 @@ pub fn begin_recording(
 
     // Read under the session lock: settings only change while it is held.
     let settings = app.state::<SharedSettings>().get();
-    #[cfg_attr(not(all(debug_assertions, feature = "input-test")), allow(unused_mut))]
-    let mut speech = settings.speech_config();
-    #[cfg(all(debug_assertions, feature = "input-test"))]
-    if crate::input_test::active() {
-        let model_id = if matches!(session.test_audio, audio::Fixture::InferenceError) {
-            "test-inference-error"
-        } else {
-            "test-model.bin"
-        };
-        speech = Ok(yap_app::speech::SpeechConfig::Local {
-            adapter: "whisper.cpp".to_owned(),
-            model_id: model_id.to_owned(),
-            artifact: std::path::PathBuf::from("test-model.bin"),
-        });
-    }
     let job = JobSettings {
         microphone_index: settings.microphone_index,
-        speech: speech?,
+        speech: settings.speech_config()?,
         language: settings.language_code(),
     };
     let index = job.microphone_index;
@@ -82,19 +68,7 @@ pub fn begin_recording(
         }
     }
 
-    #[cfg(all(debug_assertions, feature = "input-test"))]
-    let capture = if crate::input_test::active() {
-        if !crate::input_test::controlled_window() {
-            Err("Controlled test window is not foreground".to_owned())
-        } else {
-            Ok(audio::Capture::fixture(session.test_audio))
-        }
-    } else {
-        audio::Capture::start(index)
-    };
-    #[cfg(not(all(debug_assertions, feature = "input-test")))]
-    let capture = audio::Capture::start(index);
-    let capture = match capture {
+    let capture = match app.state::<audio::MicrophoneState>().start(index) {
         Ok(capture) => capture,
         Err(error) => {
             session.coordinator.fail(id);
@@ -202,8 +176,9 @@ pub async fn stop_recording(
     overlay::show(&app, Overlay::Transcribing { engine, model });
 
     let worker_cancelled = Arc::clone(&cancelled);
+    let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        transcribe::run(&request, audio, &worker_cancelled)
+        transcribe::run(&worker_app, &request, audio, &worker_cancelled)
     })
     .await;
     let result = match result {
@@ -246,7 +221,7 @@ pub async fn stop_recording(
 
 pub fn cancel_recording(session: &SessionState, app: &AppHandle) -> Result<(), String> {
     overlay::hide(app);
-    live::clear();
+    app.state::<LiveState>().clear();
     let mut session = lock(session)?;
     session.coordinator.cancel_current();
     session.capture = None;

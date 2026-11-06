@@ -164,6 +164,9 @@
     <div id="status" class="status-line" role="status"></div>
   </div>
   <script src="dictate.js"></script>
+  <script src="keys.js"></script>
+  <script src="models.js"></script>
+  <script src="credentials.js"></script>
   <script>
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
@@ -174,7 +177,6 @@
     let settings = null;
     let catalog = null;
     let tab = 'talk';
-    let download = null;              // { id, pct }
     let openFamilies = new Set(['parakeet', 'whisper']);
 
     // ---------- saving ----------
@@ -198,7 +200,7 @@
     const modelName = path => {
       if (!path) return null;
       const model = catalog.models.find(m => m.path === path);
-      if (model) return `${FAMILIES.find(f => f.id === model.family)?.name || ''} ${model.label}`.trim();
+      if (model) return Models.name(model);
       return path.split(/[\\/]/).pop();
     };
     function activeEngine() {
@@ -230,10 +232,7 @@
     }
 
     // ---------- 2b talk keys ----------
-    let capturing = null;             // 'hold' | 'toggle'
-    let captureTimer = null;
-    const captured = { modifiers: new Map(), key: null };
-    const capturedShortcut = () => [...['Ctrl', 'Alt', 'Shift', 'Meta'].filter(m => captured.modifiers.has(m)).map(m => captured.modifiers.get(m)), ...(captured.key ? [captured.key] : [])].join('+');
+    const capture = KeyCapture.create({ onChange: () => renderKeys(), onError: say });
     const keyOf = kind => kind === 'hold' ? settings.holdKey : settings.toggleKey;
     function keycaps(shortcut) {
       return shortcut.split('+').map(part => { const cap = document.createElement('span'); cap.className = 'keycap'; cap.textContent = part; return cap; });
@@ -243,11 +242,11 @@
       for (const row of document.querySelectorAll('.key-row[data-kind]')) {
         const kind = row.dataset.kind;
         const button = row.querySelector('.key-button');
-        const listening = capturing === kind;
+        const listening = capture.kind === kind;
         button.classList.toggle('listening', listening);
         button.replaceChildren();
         if (listening) {
-          const preview = capturedShortcut();
+          const preview = capture.shortcut();
           if (preview) button.append(...keycaps(preview));
           const text = document.createElement('span');
           text.className = 'listen';
@@ -259,83 +258,24 @@
           hint.textContent = 'Click to change';
           button.append(...keycaps(keyOf(kind)), hint);
         }
-        row.querySelector('.save-keys').hidden = !listening || !capturedShortcut();
+        row.querySelector('.save-keys').hidden = !listening || !capture.shortcut();
         row.querySelector('.cancel-keys').hidden = !listening;
         row.querySelector('.conflict').hidden = !same || listening;
       }
     }
-    async function cancelCapture() {
-      if (!capturing) return;
-      capturing = null;
-      clearTimeout(captureTimer);
-      captured.modifiers.clear();
-      captured.key = null;
-      renderKeys();
-      await invoke('cancel_key_capture');
-    }
     for (const row of document.querySelectorAll('.key-row[data-kind]')) {
       const kind = row.dataset.kind;
-      row.querySelector('.key-button').onclick = async () => {
-        if (capturing === kind) return;
-        try {
-          await cancelCapture();
-          capturing = kind;
-          captured.modifiers.clear();
-          captured.key = null;
-          renderKeys();
-          await invoke('begin_key_capture', { kind });
-          captureTimer = setTimeout(() => cancelCapture().catch(say), 58000);
-        } catch (error) {
-          await cancelCapture().catch(() => {});
-          say(error);
-        }
-      };
-      row.querySelector('.cancel-keys').onclick = () => cancelCapture().catch(say);
+      row.querySelector('.key-button').onclick = () => capture.begin(kind);
+      row.querySelector('.cancel-keys').onclick = () => capture.cancel().catch(say);
       row.querySelector('.save-keys').onclick = async () => {
-        const shortcut = capturedShortcut();
-        try {
-          await invoke('complete_key_capture', { kind, shortcut });
-          capturing = null;
-          clearTimeout(captureTimer);
-          captured.modifiers.clear();
-          captured.key = null;
-          await save(kind === 'hold' ? { holdKey: shortcut } : { toggleKey: shortcut });
-        } catch (error) { say(error); }
+        const result = await capture.complete();
+        if (result) await save(kind === 'hold' ? { holdKey: result.shortcut } : { toggleKey: result.shortcut });
       };
     }
     $('reset-keys').onclick = async () => {
-      await cancelCapture().catch(say);
+      await capture.cancel().catch(say);
       save({ holdKey: 'Ctrl+Space', toggleKey: 'Ctrl+Shift+Space' });
     };
-    const modifierName = event => ({ Control: 'Ctrl', Alt: 'Alt', Shift: 'Shift', Meta: 'Meta' })[event.key];
-    function browserKey(event) {
-      const code = event.code;
-      if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-      if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-      if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code) || /^Numpad[0-9]$/.test(code)) return code;
-      const names = { Space: 'Space', Tab: 'Tab', Enter: 'Enter', Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', ArrowLeft: 'Left', ArrowUp: 'Up', ArrowRight: 'Right', ArrowDown: 'Down', Semicolon: 'Semicolon', Equal: 'Equals', Comma: 'Comma', Minus: 'Minus', Period: 'Period', Slash: 'Slash', Backquote: 'Backtick', BracketLeft: 'LeftBracket', Backslash: 'Backslash', BracketRight: 'RightBracket', Quote: 'Quote' };
-      return names[code] || null;
-    }
-    function captureKey(event) {
-      if (!capturing) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (event.type !== 'keydown' || event.repeat) return;
-      if (event.key === 'Escape') { cancelCapture().catch(say); return; }
-      const modifier = modifierName(event);
-      if (modifier) { captured.modifiers.set(modifier, (event.location === 2 ? 'Right ' : '') + modifier); renderKeys(); return; }
-      const key = browserKey(event);
-      if (!key) { say('This key is not supported'); return; }
-      if (captured.key && captured.key !== key) { say('A combination can have only one non-modifier key. Cancel and try again.'); return; }
-      for (const [name, pressed] of [['Ctrl', event.ctrlKey], ['Alt', event.altKey], ['Shift', event.shiftKey], ['Meta', event.metaKey]]) {
-        if (pressed && !captured.modifiers.has(name)) captured.modifiers.set(name, name);
-      }
-      captured.key = key;
-      renderKeys();
-    }
-    window.addEventListener('keydown', captureKey, true);
-    window.addEventListener('keyup', captureKey, true);
-    window.addEventListener('pagehide', () => invoke('cancel_key_capture').catch(() => {}));
 
     // ---------- 2f general ----------
     // ---------- clean-up ----------
@@ -365,12 +305,13 @@
         const title = el('span', 'title');
         title.append(el('strong', null, model.label), el('span', null, model.note));
         const actions = el('div', 'actions');
+        const download = downloads.active;
         if (download && download.id === eventId) {
           const progress = el('div', 'progress');
           const bar = el('div'); const fill = el('span'); fill.style.width = download.pct + '%'; bar.append(fill);
           progress.append(bar, el('span', null, download.pct + '%'));
           const cancel = el('button', 'btn btn-ghost btn-small', 'Cancel');
-          cancel.onclick = () => invoke('cancel_model_download', { id: eventId }).catch(say);
+          cancel.onclick = () => downloads.cancel(eventId).catch(say);
           actions.append(progress, cancel);
         } else if (model.installed) {
           actions.append(el('span', 'muted', active && settings.cleanupEnabled ? 'In use' : 'Downloaded'));
@@ -388,12 +329,7 @@
           get.type = 'button';
           get.innerHTML = icon('<path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5"/>') + 'Download';
           get.disabled = !!download;
-          get.onclick = async () => {
-            download = { id: eventId, pct: 0 };
-            renderCleanup();
-            try { await invoke('download_cleanup', { id: model.id }); }
-            catch (error) { download = null; say(error); renderCleanup(); }
-          };
+          get.onclick = () => downloads.start(eventId, 'download_cleanup', { id: model.id }).catch(say);
           actions.append(get);
         }
         row.append(pick, title, el('span', 'size', formatBytes(model.downloadBytes || model.bytes)), actions);
@@ -434,7 +370,7 @@
       { id: 'nemotron', name: 'Nemotron Streaming', vendor: 'NVIDIA', langs: 'Text appears in the overlay while you speak' },
       { id: 'moonshine', name: 'Moonshine', vendor: 'Useful Sensors', langs: 'English · tiny, for low-power laptops' }
     ];
-    const formatBytes = bytes => bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : Math.round(bytes / 1e6) + ' MB';
+    const formatBytes = Models.formatBytes;
     const icon = path => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
     function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; }
 
@@ -470,12 +406,13 @@
       const title = el('span', 'title');
       title.append(el('strong', null, model.label), el('span', null, model.available ? model.note : 'Not included in this build'));
       const actions = el('div', 'actions');
+      const download = downloads.active;
       if (download && download.id === model.id) {
         const progress = el('div', 'progress');
         const bar = el('div'); const fill = el('span'); fill.style.width = download.pct + '%'; bar.append(fill);
         progress.append(bar, el('span', null, download.pct >= 100 && model.family !== 'whisper' ? 'Unpacking…' : download.pct + '%'));
         const cancel = el('button', 'btn btn-ghost btn-small', 'Cancel');
-        cancel.onclick = () => invoke('cancel_model_download', { id: model.id }).catch(say);
+        cancel.onclick = () => downloads.cancel(model.id).catch(say);
         actions.append(progress, cancel);
       } else if (model.path) {
         actions.append(el('span', 'muted', active ? 'In use' : 'Downloaded'));
@@ -493,12 +430,7 @@
         get.type = 'button';
         get.innerHTML = icon('<path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5"/>') + 'Download';
         get.disabled = !!download || !model.available;
-        get.onclick = async () => {
-          download = { id: model.id, pct: 0 };
-          renderFamilies();
-          try { await invoke('download_model', { id: model.id }); }
-          catch (error) { download = null; say(error); renderFamilies(); }
-        };
+        get.onclick = () => downloads.start(model.id).catch(say);
         actions.append(get);
       }
       row.append(pick, title, el('span', 'size', formatBytes(model.bytes)), actions);
@@ -512,7 +444,7 @@
         const models = catalog.models.filter(m => m.family === family.id);
         const ready = models.filter(m => m.path).length;
         const inUse = models.some(m => m.path && m.path === settings.localModelPath);
-        const loading = download && models.some(m => m.id === download.id);
+        const loading = downloads.active && models.some(m => m.id === downloads.active.id);
         const open = openFamilies.has(family.id);
         const summary = loading ? 'Downloading…' : ready ? `${ready} of ${models.length} downloaded` : models.length > 1 ? `${models.length} sizes` : formatBytes(models[0].bytes);
         const row = familyRow(family.name, family.vendor, family.langs, summary, inUse, open,
@@ -527,14 +459,14 @@
       const used = catalog.models.filter(m => m.path).reduce((sum, m) => sum + m.bytes, 0);
       $('storage').textContent = `${formatBytes(used)} used by downloaded models`;
     }
-    async function refreshCatalog() { catalog = await invoke('catalog'); }
+    async function refreshCatalog() { catalog = await Models.catalog(); }
     $('open-models-folder').onclick = () => invoke('open_models_folder').catch(say);
 
     // ---------- 2d cloud ----------
     const credentialStatus = {};       // provider -> bool
     let cloudTest = '';
     async function refreshCredential(kind, providerId) {
-      try { credentialStatus[kind + ':' + providerId] = await invoke('credential_status', { kind, provider: providerId }); }
+      try { credentialStatus[kind + ':' + providerId] = await Credentials.saved(kind, providerId); }
       catch (_) { credentialStatus[kind + ':' + providerId] = false; }
       render();
     }
@@ -554,7 +486,7 @@
       const store = el('button', 'btn btn-secondary', 'Save');
       store.type = 'button';
       store.onclick = async () => {
-        try { await invoke('update_credential', { kind, provider: providerId, secret: input.value }); input.value = ''; await refreshCredential(kind, providerId); say('Saved in Windows Credential Manager'); }
+        try { await Credentials.save(kind, providerId, input.value); input.value = ''; await refreshCredential(kind, providerId); say('Saved in Windows Credential Manager'); }
         catch (error) { say(error); }
       };
       line.append(input, reveal, store);
@@ -564,7 +496,7 @@
       if (saved) {
         const remove = el('button', 'btn btn-ghost btn-small', 'Remove');
         remove.type = 'button';
-        remove.onclick = async () => { try { await invoke('update_credential', { kind, provider: providerId, secret: null }); await refreshCredential(kind, providerId); } catch (error) { say(error); } };
+        remove.onclick = async () => { try { await Credentials.remove(kind, providerId); await refreshCredential(kind, providerId); } catch (error) { say(error); } };
         statusLine.append(remove);
       }
       wrap.append(line, statusLine);
@@ -651,11 +583,11 @@
     $('remote-endpoint').onchange = event => { remoteTest = ''; save({ remoteEndpoint: event.target.value.trim() }).then(() => refreshCredential('remote', '')); };
     $('remote-model').onchange = event => save({ remoteModel: event.target.value.trim() });
     $('save-remote-token').onclick = async () => {
-      try { await invoke('update_credential', { kind: 'remote', provider: '', secret: $('remote-token').value }); $('remote-token').value = ''; await save({ remoteApiKeyEnv: null }); await refreshCredential('remote', ''); }
+      try { await Credentials.save('remote', '', $('remote-token').value); $('remote-token').value = ''; await save({ remoteApiKeyEnv: null }); await refreshCredential('remote', ''); }
       catch (error) { say(error); }
     };
     $('remove-remote-token').onclick = async () => {
-      try { await invoke('update_credential', { kind: 'remote', provider: '', secret: null }); await refreshCredential('remote', ''); } catch (error) { say(error); }
+      try { await Credentials.remove('remote'); await refreshCredential('remote', ''); } catch (error) { say(error); }
     };
     $('test-remote').onclick = async () => {
       remoteTest = 'Reaching server…'; render();
@@ -670,21 +602,17 @@
     // ---------- engine switching and tabs ----------
     for (const button of document.querySelectorAll('.use-engine')) button.onclick = () => save({ engine: button.dataset.engine });
     for (const button of document.querySelectorAll('[data-tab]')) {
-      button.onclick = () => { cancelCapture().catch(say); tab = button.dataset.tab; say(''); render(); };
+      button.onclick = () => { capture.cancel().catch(say); tab = button.dataset.tab; say(''); render(); };
     }
 
     // ---------- events ----------
-    listen('model-download-progress', async ({ payload }) => {
-      const forCleanup = payload.id.startsWith('cleanup:');
-      if (payload.state === 'downloading') {
-        download = { id: payload.id, pct: Math.floor(payload.downloaded * 100 / payload.total) };
-        forCleanup ? renderCleanup() : renderFamilies();
-        return;
-      }
-      download = null;
-      if (payload.error) say(payload.error); else if (payload.state === 'ready') say('Download finished');
-      await (forCleanup ? refreshCleanup() : refreshCatalog()).catch(say);
-      render();
+    const downloads = Models.downloads({
+      onUpdate: id => id.startsWith('cleanup:') ? renderCleanup() : renderFamilies(),
+      onFinish: async payload => {
+        if (payload.error) say(payload.error); else if (payload.state === 'ready') say('Download finished');
+        await (payload.id.startsWith('cleanup:') ? refreshCleanup() : refreshCatalog()).catch(say);
+        render();
+      },
     });
     listen('cleanup-status', ({ payload }) => { if (cleanup) { cleanup.status = payload; renderCleanup(); } });
     listen('settings-changed', async () => { try { settings = await invoke('current_settings'); render(); } catch (_) {} });
@@ -693,7 +621,7 @@
     // ---------- start ----------
     invoke('onboarding_needed').then(async needed => {
       if (needed) { location.replace('onboarding.html'); return; }
-      const [devices, saved, list] = await Promise.all([invoke('microphones'), invoke('current_settings'), invoke('catalog')]);
+      const [devices, saved, list] = await Promise.all([invoke('microphones'), invoke('current_settings'), Models.catalog()]);
       settings = saved;
       catalog = list;
       await refreshCleanup().catch(say);

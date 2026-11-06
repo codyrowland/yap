@@ -76,15 +76,13 @@ pub fn native_key_known(code: u32) -> bool {
     code != 0 && code != 0xFF && key_from_vk(code) == Key::Native(code)
 }
 
-#[cfg(all(debug_assertions, feature = "input-test"))]
-fn accept_injected() -> bool {
-    std::env::args().any(|arg| arg == "--input-test")
-        && std::env::var("YAP_INPUT_TEST").as_deref() == Ok("1")
-}
+static ACCEPT_INJECTED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(not(all(debug_assertions, feature = "input-test")))]
-fn accept_injected() -> bool {
-    false
+/// Lets synthetic key presses act as talk keys. Only the input test, which
+/// presses them itself, turns this on.
+#[cfg_attr(not(feature = "input-test"), allow(dead_code))]
+pub fn accept_injected_keys() {
+    ACCEPT_INJECTED.store(true, Ordering::Relaxed);
 }
 
 fn normalize_key(key: u32, scan: u32, flags: u32) -> u32 {
@@ -200,7 +198,7 @@ unsafe extern "system" fn hook(code: i32, message: WPARAM, data: LPARAM) -> LRES
     if code >= 0 {
         let key = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
         let tracing = TRACE.get().is_some();
-        if key.flags & LLKHF_INJECTED == 0 || accept_injected() {
+        if key.flags & LLKHF_INJECTED == 0 || ACCEPT_INJECTED.load(Ordering::Relaxed) {
             let down = message as u32 == WM_KEYDOWN || message as u32 == WM_SYSKEYDOWN;
             let up = message as u32 == WM_KEYUP || message as u32 == WM_SYSKEYUP;
             let vk = normalize_key(key.vkCode, key.scanCode, key.flags);

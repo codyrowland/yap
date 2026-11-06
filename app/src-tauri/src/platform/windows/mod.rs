@@ -1,5 +1,6 @@
 pub mod autostart;
 pub mod clipboard;
+pub mod credentials;
 pub mod field_watch;
 pub mod helper_process;
 pub mod input;

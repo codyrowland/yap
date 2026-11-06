@@ -6,7 +6,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Emitter, Manager, PhysicalPosition, Rect};
 
-use crate::commands::show_main;
+use crate::commands::tray::show_main;
 
 pub const LABEL: &str = "tray";
 const GAP: f64 = 8.0;

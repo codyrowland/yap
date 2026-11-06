@@ -6,15 +6,13 @@
 //!   named after the model id. Only the files the recognizer needs are
 //!   extracted (see [`required_files`]).
 //!
-//! Every download is checked against a pinned size and SHA-256 before use.
+//! Downloading itself is in [`crate::download`].
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use sha2::{Digest, Sha256};
+use crate::download;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,9 +79,6 @@ pub fn required_files(family: Family) -> &'static [&'static str] {
         Family::Moonshine => MOONSHINE_FILES,
     }
 }
-
-/// Written last into a model folder; its presence means the unpack finished.
-const COMPLETE_MARKER: &str = ".yap-complete";
 
 pub const MODELS: [Model; 12] = [
     Model {
@@ -260,7 +255,7 @@ fn url(model: &Model) -> String {
 pub fn installed(model: &Model, directory: &Path) -> bool {
     let path = path(model, directory);
     if model.family.archived() {
-        path.join(COMPLETE_MARKER).is_file()
+        download::unpacked(&path)
             && required_files(model.family)
                 .iter()
                 .all(|file| path.join(file).is_file())
@@ -285,152 +280,6 @@ pub fn remove(model: &Model, directory: &Path) -> Result<(), String> {
     }
 }
 
-fn verify(file: &mut File, expected: &str) -> Result<(), String> {
-    let mut hasher = Sha256::new();
-    std::io::copy(file, &mut hasher).map_err(|error| error.to_string())?;
-    if format!("{:x}", hasher.finalize()) != expected {
-        return Err("Downloaded model failed integrity check".to_owned());
-    }
-
-    Ok(())
-}
-
-/// `parakeet-tdt-0.6b-v3` → `parakeet-tdt-0.6b-v3.unpacking` (model ids
-/// contain dots, so `with_extension` would mangle them).
-fn staging_dir(destination: &Path) -> PathBuf {
-    let mut name = destination.file_name().unwrap_or_default().to_os_string();
-    name.push(".unpacking");
-    destination.with_file_name(name)
-}
-
-/// Unpacks the files the recognizer needs (`wanted`) from a verified archive
-/// into `destination`. Entries are matched by file name only and written
-/// under fixed names, so archive paths can never escape the folder.
-fn unpack(
-    archive: &Path,
-    destination: &Path,
-    wanted: &[&str],
-    cancelled: &AtomicBool,
-) -> Result<(), String> {
-    let staging = staging_dir(destination);
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
-    let result = (|| {
-        let file = File::open(archive).map_err(|error| error.to_string())?;
-        let mut tar = tar::Archive::new(bzip2::read::BzDecoder::new(std::io::BufReader::new(file)));
-        let mut found = vec![false; wanted.len()];
-        for entry in tar
-            .entries()
-            .map_err(|_| "Model archive is damaged".to_owned())?
-        {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err("Cancelled".to_owned());
-            }
-            let mut entry = entry.map_err(|_| "Model archive is damaged".to_owned())?;
-            if !entry.header().entry_type().is_file() {
-                continue;
-            }
-            let name = entry.path().ok().and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            });
-            let Some(index) = name
-                .as_deref()
-                .and_then(|name| wanted.iter().position(|file| *file == name))
-            else {
-                continue;
-            };
-            let mut output =
-                File::create(staging.join(wanted[index])).map_err(|error| error.to_string())?;
-            std::io::copy(&mut entry, &mut output)
-                .map_err(|_| "Could not unpack model".to_owned())?;
-            found[index] = true;
-        }
-        if let Some(missing) = wanted
-            .iter()
-            .zip(found)
-            .find_map(|(name, found)| (!found).then_some(*name))
-        {
-            return Err(format!("Model archive is missing {missing}"));
-        }
-        fs::write(staging.join(COMPLETE_MARKER), []).map_err(|error| error.to_string())?;
-        let _ = fs::remove_dir_all(destination);
-        fs::rename(&staging, destination).map_err(|error| error.to_string())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&staging);
-    }
-    result
-}
-
-/// Downloads `url` to `partial`, checking the exact size and SHA-256.
-/// `progress` gets the bytes downloaded so far. Leaves the file in place on
-/// success; the caller moves or unpacks it.
-pub fn fetch(
-    url: &str,
-    partial: &Path,
-    bytes: u64,
-    sha256: &str,
-    cancelled: &AtomicBool,
-    progress: &mut dyn FnMut(u64),
-) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(3_600))
-        .build()
-        .map_err(|_| "Could not start model download".to_owned())?;
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|_| "Could not connect to model host".to_owned())?
-        .error_for_status()
-        .map_err(|_| "Model download failed".to_owned())?;
-    if response
-        .content_length()
-        .is_some_and(|length| length != bytes)
-    {
-        return Err("Model download had unexpected size".to_owned());
-    }
-
-    let mut file = File::create(partial).map_err(|error| error.to_string())?;
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut downloaded = 0_u64;
-    loop {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("Cancelled".to_owned());
-        }
-
-        let count = response
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
-        if count == 0 {
-            break;
-        }
-
-        downloaded += count as u64;
-        if downloaded > bytes {
-            return Err("Model download exceeded expected size".to_owned());
-        }
-
-        file.write_all(&buffer[..count])
-            .map_err(|error| error.to_string())?;
-        progress(downloaded);
-    }
-
-    if downloaded != bytes {
-        return Err("Incomplete model download".to_owned());
-    }
-
-    file.sync_all().map_err(|error| error.to_string())?;
-    drop(file);
-    let mut file = File::open(partial).map_err(|error| error.to_string())?;
-    verify(&mut file, sha256)?;
-    if cancelled.load(Ordering::Relaxed) {
-        return Err("Cancelled".to_owned());
-    }
-    Ok(())
-}
-
 /// Downloads, verifies and (for Parakeet) unpacks a model. `progress` gets
 /// the number of bytes downloaded so far.
 pub fn download(
@@ -443,7 +292,7 @@ pub fn download(
     let final_path = path(model, directory);
     if !model.family.archived() && installed(model, directory) {
         let mut file = File::open(&final_path).map_err(|error| error.to_string())?;
-        if verify(&mut file, model.sha256).is_ok() {
+        if download::verify(&mut file, model.sha256).is_ok() {
             return Ok(final_path);
         }
     }
@@ -457,7 +306,7 @@ pub fn download(
             return Err("Cancelled".to_owned());
         }
 
-        fetch(
+        download::fetch(
             &url(model),
             &partial,
             model.bytes,
@@ -466,7 +315,7 @@ pub fn download(
             &mut progress,
         )?;
         if model.family.archived() {
-            unpack(
+            download::unpack_tar_bz2(
                 &partial,
                 &final_path,
                 required_files(model.family),
@@ -488,7 +337,8 @@ pub fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Seek;
+    use crate::download::{COMPLETE_MARKER, staging_dir, unpack_tar_bz2};
+    use std::io::Write;
 
     fn temp_dir(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("yap-{name}-{}", std::process::id()));
@@ -541,23 +391,6 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    #[test]
-    fn verifies_content_not_just_file_size() {
-        let path = std::env::temp_dir().join(format!("yap-hash-test-{}", std::process::id()));
-        fs::write(&path, b"abc").unwrap();
-        let mut file = File::open(&path).unwrap();
-        assert!(
-            verify(
-                &mut file,
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-            )
-            .is_ok()
-        );
-        file.rewind().unwrap();
-        assert!(verify(&mut file, MODELS[0].sha256).is_err());
-        fs::remove_file(path).unwrap();
-    }
-
     fn archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
         for (name, data) in entries {
@@ -591,7 +424,7 @@ mod tests {
         )
         .unwrap();
         let destination = directory.join("parakeet-tdt-0.6b-v3");
-        unpack(
+        unpack_tar_bz2(
             &source,
             &destination,
             TRANSDUCER_FILES,
@@ -623,7 +456,7 @@ mod tests {
         )
         .unwrap();
         let model = model("moonshine-tiny-en").unwrap();
-        unpack(
+        unpack_tar_bz2(
             &source,
             &path(model, &directory),
             required_files(model.family),
@@ -653,7 +486,7 @@ mod tests {
         let source = directory.join("model.tar.bz2");
         fs::write(&source, archive(&[("x/encoder.int8.onnx", b"e")])).unwrap();
         let destination = directory.join("parakeet-tdt-0.6b-v3");
-        let error = unpack(
+        let error = unpack_tar_bz2(
             &source,
             &destination,
             TRANSDUCER_FILES,
@@ -663,10 +496,6 @@ mod tests {
         assert!(error.contains("missing"), "{error}");
         assert!(!destination.exists());
         assert!(!staging_dir(&destination).exists());
-        assert_eq!(
-            staging_dir(&destination).file_name().unwrap(),
-            "parakeet-tdt-0.6b-v3.unpacking"
-        );
         fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -99,6 +99,9 @@
     </div>
   </div>
   <script src="dictate.js"></script>
+  <script src="keys.js"></script>
+  <script src="models.js"></script>
+  <script src="credentials.js"></script>
   <script>
     const invoke = window.__TAURI__.core.invoke;
     const status = document.getElementById('message');
@@ -114,54 +117,47 @@
     let permissions = null;
     let models = [];
     let selectedModel = 'parakeet-tdt-0.6b-v3';
-    let activeDownload = null;
     let saved = null;
-    let capturingKind = null;
-    let captureTimer = null;
-    let capturedModifiers = new Map();
-    let capturedKey = null;
+    const say = error => { status.textContent = String(error); };
 
     function setKey(button, key) {
       button.value = key;
       button.textContent = key;
     }
 
-    function capturedShortcut() {
-      const parts = ['Ctrl', 'Alt', 'Shift', 'Meta'].filter(key => capturedModifiers.has(key)).map(key => capturedModifiers.get(key));
-      if (capturedKey) parts.push(capturedKey);
-      return parts.join('+');
+    const capture = KeyCapture.create({ onChange: renderCapture, onError: say });
+    function renderCapture() {
+      for (const [kind, button] of [['hold', holdKey], ['toggle', toggleKey]]) {
+        const listening = capture.kind === kind;
+        button.textContent = listening ? capture.shortcut() || 'Press keys one at a time…' : button.value;
+        document.getElementById(`save-${kind}-key-capture`).hidden = !listening || !capture.shortcut();
+        document.getElementById(`cancel-${kind}-key-capture`).hidden = !listening;
+      }
     }
 
-    function updateCapturePreview() {
-      const button = capturingKind === 'hold' ? holdKey : toggleKey;
-      button.textContent = capturedShortcut() || 'Press keys one at a time…';
-      document.getElementById('save-hold-key-capture').hidden = capturingKind !== 'hold' || !capturedShortcut();
-      document.getElementById('save-toggle-key-capture').hidden = capturingKind !== 'toggle' || !capturedShortcut();
-      document.getElementById('cancel-hold-key-capture').hidden = capturingKind !== 'hold';
-      document.getElementById('cancel-toggle-key-capture').hidden = capturingKind !== 'toggle';
-    }
-
-    async function cancelCapture() {
-      if (!capturingKind) return;
-      const button = capturingKind === 'hold' ? holdKey : toggleKey;
-      capturingKind = null;
-      capturedModifiers.clear();
-      capturedKey = null;
-      clearTimeout(captureTimer);
-      button.textContent = button.value;
-      document.getElementById('save-hold-key-capture').hidden = true;
-      document.getElementById('save-toggle-key-capture').hidden = true;
-      document.getElementById('cancel-hold-key-capture').hidden = true;
-      document.getElementById('cancel-toggle-key-capture').hidden = true;
-      await invoke('cancel_key_capture');
-    }
+    const downloads = Models.downloads({
+      onUpdate: () => {
+        renderModels();
+        const active = downloads.active;
+        if (active) status.textContent = active.pct >= 100 ? `Unpacking ${active.id}…` : `Downloading ${active.id}: ${active.pct}%`;
+      },
+      onFinish: async payload => {
+        status.textContent = payload.error || `${payload.id}: ${payload.state}`;
+        try {
+          models = (await Models.catalog()).models;
+          renderModels();
+        } catch (error) {
+          say(error);
+        }
+      },
+    });
 
     function engine() {
       return document.querySelector('[name="engine"]:checked').value;
     }
 
     function showStep(index) {
-      if (step === 3 && index !== step) cancelCapture().catch(error => status.textContent = String(error));
+      if (step === 3 && index !== step) capture.cancel().catch(say);
       // Make sure the talk keys are live (not left in key-capture mode) on
       // every step but "Talk keys".
       if (index !== 3) invoke('cancel_key_capture').catch(() => {});
@@ -208,31 +204,22 @@
         choice.checked = selectedModel === id;
         choice.onchange = () => { selectedModel = id; renderModels(); };
         const label = document.createElement('span');
-        const name = `${{ parakeet: 'Parakeet', whisper: 'Whisper', moonshine: 'Moonshine', nemotron: 'Nemotron' }[item.family]} ${item.label}`;
-        label.textContent = `${name} · ${(item.bytes / 1e6).toFixed(0)} MB${id === 'parakeet-tdt-0.6b-v3' ? ' · recommended, fastest' : ''}`;
+        label.textContent = `${Models.name(item)} · ${Models.formatBytes(item.bytes)}${id === 'parakeet-tdt-0.6b-v3' ? ' · recommended, fastest' : ''}`;
         const action = document.createElement('button');
         action.type = 'button';
         action.className = 'btn btn-secondary';
-        if (activeDownload === id) {
+        if (downloads.active?.id === id) {
           action.textContent = 'Cancel';
-          action.onclick = () => invoke('cancel_model_download', { id }).catch(error => status.textContent = String(error));
+          action.onclick = () => downloads.cancel(id).catch(say);
         } else if (item.path) {
           action.textContent = 'Ready';
           action.disabled = true;
         } else {
           action.textContent = 'Download';
-          action.disabled = !!activeDownload;
-          action.onclick = async () => {
+          action.disabled = !!downloads.active;
+          action.onclick = () => {
             selectedModel = id;
-            activeDownload = id;
-            renderModels();
-            try {
-              await invoke('download_model', { id });
-            } catch (error) {
-              activeDownload = null;
-              status.textContent = String(error);
-              renderModels();
-            }
+            downloads.start(id).catch(say);
           };
         }
         row.append(choice, label, action);
@@ -276,19 +263,19 @@
       saved = await invoke('save_settings', { settings: next });
       const cloudKey = document.getElementById('cloud-key');
       if (choice === 'cloud' && cloudKey.value) {
-        await invoke('update_credential', { kind: 'cloud', provider: saved.cloudProvider, secret: cloudKey.value });
+        await Credentials.save('cloud', saved.cloudProvider, cloudKey.value);
         cloudKey.value = '';
       }
-      if (choice === 'cloud' && saved.cloudProvider !== 'custom' && !await invoke('credential_status', { kind: 'cloud', provider: saved.cloudProvider })) {
+      if (choice === 'cloud' && saved.cloudProvider !== 'custom' && !await Credentials.saved('cloud', saved.cloudProvider)) {
         throw new Error('Enter an API key.');
       }
       if (choice === 'remote' && apiKey.value) {
-        await invoke('update_credential', { kind: 'remote', provider: '', secret: apiKey.value });
+        await Credentials.save('remote', '', apiKey.value);
         apiKey.value = '';
       }
     }
 
-    Promise.all([invoke('microphones'), invoke('current_settings'), invoke('catalog')]).then(([devices, settings, catalog]) => {
+    Promise.all([invoke('microphones'), invoke('current_settings'), Models.catalog()]).then(([devices, settings, catalog]) => {
       saved = settings;
       models = catalog.models;
       providers = catalog.providers.filter(p => p.supported);
@@ -320,88 +307,13 @@
     }).catch(error => status.textContent = String(error));
 
     for (const [kind, button] of [['hold', holdKey], ['toggle', toggleKey]]) {
-      button.onclick = async () => {
-        try {
-          await cancelCapture();
-          capturingKind = kind;
-          capturedModifiers.clear();
-          capturedKey = null;
-          updateCapturePreview();
-          await invoke('begin_key_capture', { kind });
-          if (capturingKind === kind) captureTimer = setTimeout(() => cancelCapture().catch(error => status.textContent = String(error)), 58000);
-        } catch (error) {
-          await cancelCapture().catch(() => {});
-          status.textContent = String(error);
-        }
+      button.onclick = () => capture.begin(kind);
+      document.getElementById(`cancel-${kind}-key-capture`).onclick = () => capture.cancel().catch(say);
+      document.getElementById(`save-${kind}-key-capture`).onclick = async () => {
+        const result = await capture.complete();
+        if (result) setKey(button, result.shortcut);
       };
     }
-    for (const kind of ['hold', 'toggle']) {
-      document.getElementById(`cancel-${kind}-key-capture`).onclick = () => cancelCapture().catch(error => status.textContent = String(error));
-    }
-    async function saveCapturedKeys() {
-      if (!capturingKind) return;
-      const kind = capturingKind;
-      const key = capturedShortcut();
-      try {
-        await invoke('complete_key_capture', { kind, shortcut: key });
-        const button = kind === 'hold' ? holdKey : toggleKey;
-        capturingKind = null;
-        clearTimeout(captureTimer);
-        capturedModifiers.clear();
-        capturedKey = null;
-        document.getElementById('save-hold-key-capture').hidden = true;
-        document.getElementById('save-toggle-key-capture').hidden = true;
-        document.getElementById('cancel-hold-key-capture').hidden = true;
-        document.getElementById('cancel-toggle-key-capture').hidden = true;
-        setKey(button, key);
-      } catch (error) {
-        status.textContent = String(error);
-      }
-    }
-    document.getElementById('save-hold-key-capture').onclick = saveCapturedKeys;
-    document.getElementById('save-toggle-key-capture').onclick = saveCapturedKeys;
-    const modifierName = event => ({ Control: 'Ctrl', Alt: 'Alt', Shift: 'Shift', Meta: 'Meta' })[event.key];
-    function browserKey(event) {
-      const code = event.code;
-      if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-      if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-      if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code) || /^Numpad[0-9]$/.test(code)) return code;
-      const names = { Space: 'Space', Tab: 'Tab', Enter: 'Enter', Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', ArrowLeft: 'Left', ArrowUp: 'Up', ArrowRight: 'Right', ArrowDown: 'Down', Semicolon: 'Semicolon', Equal: 'Equals', Comma: 'Comma', Minus: 'Minus', Period: 'Period', Slash: 'Slash', Backquote: 'Backtick', BracketLeft: 'LeftBracket', Backslash: 'Backslash', BracketRight: 'RightBracket', Quote: 'Quote' };
-      return names[code] || null;
-    }
-    function captureBrowserKey(event) {
-      if (!capturingKind) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (event.type !== 'keydown' || event.repeat) return;
-      if (event.key === 'Escape') {
-        cancelCapture().catch(error => status.textContent = String(error));
-        return;
-      }
-      const modifier = modifierName(event);
-      if (modifier) {
-        capturedModifiers.set(modifier, (event.location === 2 ? 'Right ' : '') + modifier);
-        updateCapturePreview();
-        return;
-      }
-      const key = browserKey(event);
-      if (!key) {
-        status.textContent = 'This key is not supported';
-        return;
-      }
-      if (capturedKey && capturedKey !== key) {
-        status.textContent = 'A combination can have only one non-modifier key. Cancel and try again.';
-        return;
-      }
-      for (const [name, pressed] of [['Ctrl', event.ctrlKey], ['Alt', event.altKey], ['Shift', event.shiftKey], ['Meta', event.metaKey]]) {
-        if (pressed && !capturedModifiers.has(name)) capturedModifiers.set(name, name);
-      }
-      capturedKey = key;
-      updateCapturePreview();
-    }
-    window.addEventListener('keydown', captureBrowserKey, true);
-    window.addEventListener('keyup', captureBrowserKey, true);
-    window.addEventListener('pagehide', () => invoke('cancel_key_capture').catch(() => {}));
     document.getElementById('check-permissions').onclick = checkPermissions;
     microphone.onchange = checkPermissions;
     for (const choice of document.querySelectorAll('[name="engine"]')) {
@@ -435,21 +347,6 @@
         next.disabled = false;
       }
     };
-    window.__TAURI__.event.listen('model-download-progress', async ({ payload }) => {
-      if (payload.state === 'downloading') {
-        const pct = Math.floor(payload.downloaded * 100 / payload.total);
-        status.textContent = pct >= 100 ? `Unpacking ${payload.id}…` : `Downloading ${payload.id}: ${pct}%`;
-      } else {
-        activeDownload = null;
-        status.textContent = payload.error || `${payload.id}: ${payload.state}`;
-        try {
-          models = (await invoke('catalog')).models;
-          renderModels();
-        } catch (error) {
-          status.textContent = String(error);
-        }
-      }
-    });
     // "Try it" is normal dictation: the box is an ordinary text field, so
     // Yap inserts into it exactly as it would into any other app.
     const practiceBox = document.getElementById('practice');

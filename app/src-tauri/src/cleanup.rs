@@ -8,10 +8,11 @@
 //! bundle their own copy of ggml). Both the runtime and the models are
 //! downloaded with a pinned size and SHA-256.
 //!
-//! This module holds the catalog, downloads, prompt and response handling.
-//! Starting and stopping the server lives in the app (`assistant.rs`).
+//! This module holds the catalog, prompt and response handling; downloading
+//! is in `download.rs`. Starting and stopping the server lives in the app
+//! (`assistant.rs`).
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -19,7 +20,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::models;
+use crate::download;
 
 /// llama.cpp build b11763 (2026-10-20), Windows x64 CPU.
 pub const RUNTIME_VERSION: &str = "b11763";
@@ -27,7 +28,6 @@ const RUNTIME_FILE: &str = "llama-b11763-bin-win-cpu-x64.zip";
 const RUNTIME_BYTES: u64 = 23_958_528;
 const RUNTIME_SHA256: &str = "a24504506cd03a352f4990c5f3cbff347eff3a2cf7ec15038835aa690b73d0ad";
 pub const SERVER_EXE: &str = "llama-server.exe";
-const COMPLETE_MARKER: &str = ".yap-complete";
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +83,7 @@ pub fn model_path(model: &CleanupModel, models_dir: &Path) -> PathBuf {
 
 pub fn runtime_installed(models_dir: &Path) -> bool {
     let folder = runtime_dir(models_dir);
-    folder.join(COMPLETE_MARKER).is_file() && folder.join(SERVER_EXE).is_file()
+    download::unpacked(&folder) && folder.join(SERVER_EXE).is_file()
 }
 
 pub fn model_installed(model: &CleanupModel, models_dir: &Path) -> bool {
@@ -117,53 +117,6 @@ fn keep_runtime_file(name: &str) -> bool {
     name == SERVER_EXE || name.to_ascii_lowercase().ends_with(".dll") || name.starts_with("LICENSE")
 }
 
-/// Unpacks the server from a verified release zip. Names are taken from the
-/// final path component only, so entries cannot escape the folder.
-fn unpack_runtime(archive: &Path, destination: &Path) -> Result<(), String> {
-    let mut staging = destination.as_os_str().to_os_string();
-    staging.push(".unpacking");
-    let staging = PathBuf::from(staging);
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
-    let result = (|| {
-        let file = File::open(archive).map_err(|error| error.to_string())?;
-        let mut zip =
-            zip::ZipArchive::new(file).map_err(|_| "Runtime archive is damaged".to_owned())?;
-        for index in 0..zip.len() {
-            let mut entry = zip
-                .by_index(index)
-                .map_err(|_| "Runtime archive is damaged".to_owned())?;
-            if !entry.is_file() {
-                continue;
-            }
-            let Some(name) = Path::new(entry.name())
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_owned)
-            else {
-                continue;
-            };
-            if !keep_runtime_file(&name) {
-                continue;
-            }
-            let mut output =
-                File::create(staging.join(&name)).map_err(|error| error.to_string())?;
-            std::io::copy(&mut entry, &mut output)
-                .map_err(|_| "Could not unpack the clean-up runtime".to_owned())?;
-        }
-        if !staging.join(SERVER_EXE).is_file() {
-            return Err("Runtime archive is missing llama-server.exe".to_owned());
-        }
-        fs::write(staging.join(COMPLETE_MARKER), []).map_err(|error| error.to_string())?;
-        let _ = fs::remove_dir_all(destination);
-        fs::rename(&staging, destination).map_err(|error| error.to_string())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&staging);
-    }
-    result
-}
-
 /// Downloads whatever `model` still needs (runtime, weights). `progress`
 /// gets the total bytes downloaded so far across both.
 pub fn download(
@@ -181,7 +134,7 @@ pub fn download(
         let url = format!(
             "https://github.com/ggml-org/llama.cpp/releases/download/{RUNTIME_VERSION}/{RUNTIME_FILE}"
         );
-        let result = models::fetch(
+        let result = download::fetch(
             &url,
             &partial,
             RUNTIME_BYTES,
@@ -189,7 +142,14 @@ pub fn download(
             cancelled,
             &mut |bytes| progress(bytes),
         )
-        .and_then(|()| unpack_runtime(&partial, &runtime_dir(models_dir)));
+        .and_then(|()| {
+            download::unpack_zip(
+                &partial,
+                &runtime_dir(models_dir),
+                keep_runtime_file,
+                SERVER_EXE,
+            )
+        });
         let _ = fs::remove_file(&partial);
         result?;
         done = RUNTIME_BYTES;
@@ -201,7 +161,7 @@ pub fn download(
             "https://huggingface.co/{}/resolve/main/{}",
             model.repo, model.filename
         );
-        let result = models::fetch(
+        let result = download::fetch(
             &url,
             &partial,
             model.bytes,
@@ -339,6 +299,7 @@ pub fn clean(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
     use std::net::TcpListener;
 
@@ -436,7 +397,7 @@ mod tests {
         }
         let destination = runtime_dir(&root);
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        unpack_runtime(&archive, &destination).unwrap();
+        download::unpack_zip(&archive, &destination, keep_runtime_file, SERVER_EXE).unwrap();
         assert!(runtime_installed(&root));
         assert!(destination.join("llama.dll").is_file());
         assert!(destination.join("ggml.dll").is_file());

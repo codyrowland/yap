@@ -140,45 +140,47 @@ pub fn microphones() -> Result<Vec<String>, String> {
         .collect()
 }
 
-#[cfg(all(debug_assertions, feature = "input-test"))]
-#[derive(Clone, Copy)]
-pub enum Fixture {
-    Speech,
-    Silence,
-    Bounded,
-    CaptureError,
-    InferenceError,
+/// Where recordings come from. The app uses the system's microphones;
+/// tests put in a fake one.
+pub trait Microphone: Send + Sync {
+    fn start(&self, index: usize) -> Result<Capture, String>;
 }
 
+pub struct SystemMicrophone;
+
+impl Microphone for SystemMicrophone {
+    fn start(&self, index: usize) -> Result<Capture, String> {
+        Capture::start(index)
+    }
+}
+
+pub type MicrophoneState = Box<dyn Microphone>;
+
 impl Capture {
-    #[cfg(all(debug_assertions, feature = "input-test"))]
-    pub fn fixture(kind: Fixture) -> Self {
+    /// A finished capture of mono `samples`; `error` is reported on stop.
+    #[cfg_attr(not(feature = "input-test"), allow(dead_code))]
+    pub fn prerecorded(samples: &[f32], sample_rate: u32, error: Option<String>) -> Self {
         let (sender, errors) = mpsc::channel();
-        if matches!(kind, Fixture::CaptureError) {
-            let _ = sender.send("Test microphone failure".to_owned());
+        if let Some(error) = error {
+            let _ = sender.send(error);
         }
         let mut buffer = AudioBuffer {
             samples: Vec::new(),
             channels: 1,
-            max_frames: 16_000 * MAX_SECONDS,
+            max_frames: sample_rate as usize * MAX_SECONDS,
             limited: false,
             level: 0.0,
         };
-        let samples = match kind {
-            Fixture::Speech | Fixture::CaptureError | Fixture::InferenceError => vec![0.02; 3_200],
-            Fixture::Silence => vec![0.0; 3_200],
-            Fixture::Bounded => vec![0.02; buffer.max_frames + 1],
-        };
-        buffer.append(&samples, |sample| sample);
+        buffer.append(samples, |sample| sample);
         Self {
             stream: None,
             buffer: Arc::new(Mutex::new(buffer)),
             errors,
-            sample_rate: 16_000,
+            sample_rate,
         }
     }
 
-    pub fn start(index: usize) -> Result<Self, String> {
+    fn start(index: usize) -> Result<Self, String> {
         let device = cpal::default_host()
             .input_devices()
             .map_err(|error| error.to_string())?

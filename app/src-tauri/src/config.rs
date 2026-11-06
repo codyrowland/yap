@@ -147,7 +147,7 @@ pub fn apply(
     ));
     shared.set(next.clone());
     drop(session);
-    crate::dictation::preload(&next);
+    crate::dictation::preload(app, &next);
     crate::assistant::sync(app, &next);
     let _ = app.emit("settings-changed", ());
     Ok(next)

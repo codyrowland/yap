@@ -88,29 +88,29 @@ fn main() {
         .manage(Arc::new(Mutex::new(FieldWatch::start())))
         .manage(Arc::new(Mutex::new(None::<(String, Arc<AtomicBool>)>)))
         .invoke_handler(tauri::generate_handler![
-            commands::microphones,
-            commands::current_settings,
-            commands::save_settings,
-            commands::catalog,
-            commands::begin_key_capture,
-            commands::cancel_key_capture,
-            commands::complete_key_capture,
-            commands::credential_status,
-            commands::update_credential,
-            commands::test_connection,
-            commands::download_model,
-            commands::cancel_model_download,
-            commands::delete_model,
-            commands::cleanup_catalog,
-            commands::download_cleanup,
-            commands::delete_cleanup,
-            commands::open_models_folder,
-            commands::history_entries,
-            commands::delete_history,
-            commands::tray_state,
-            commands::set_engine,
-            commands::open_window,
-            commands::quit_app,
+            commands::settings::microphones,
+            commands::settings::current_settings,
+            commands::settings::save_settings,
+            commands::settings::catalog,
+            commands::settings::begin_key_capture,
+            commands::settings::cancel_key_capture,
+            commands::settings::complete_key_capture,
+            commands::credentials::credential_status,
+            commands::credentials::update_credential,
+            commands::credentials::test_connection,
+            commands::models::download_model,
+            commands::models::cancel_model_download,
+            commands::models::delete_model,
+            commands::cleanup::cleanup_catalog,
+            commands::cleanup::download_cleanup,
+            commands::cleanup::delete_cleanup,
+            commands::models::open_models_folder,
+            commands::history::history_entries,
+            commands::history::delete_history,
+            commands::tray::tray_state,
+            commands::tray::set_engine,
+            commands::tray::open_window,
+            commands::tray::quit_app,
             onboarding::onboarding_needed,
             onboarding::onboarding_permissions,
             onboarding::complete_onboarding,
@@ -127,28 +127,18 @@ fn main() {
             ));
             start_history_expiry(app.handle().clone());
 
-            #[cfg_attr(not(all(debug_assertions, feature = "input-test")), allow(unused_mut))]
-            let mut settings = config::load(app.handle()).map_err(std::io::Error::other)?;
+            let settings = config::load(app.handle()).map_err(std::io::Error::other)?;
+            let microphone: audio::MicrophoneState = Box::new(audio::SystemMicrophone);
+            let engines = dictation::Engines::system();
             #[cfg(all(debug_assertions, feature = "input-test"))]
-            if input_test::active() {
-                settings.hold_key = "F8".to_owned();
-                settings.insertion = yap_app::settings::Insertion::Type;
-            }
+            let (settings, microphone, engines) = input_test::fakes(settings, microphone, engines);
+            app.manage(microphone);
+            app.manage(engines);
+            app.manage(dictation::LiveState::default());
             let (hold_key, toggle_key) = (settings.hold_key.clone(), settings.toggle_key.clone());
-            #[cfg(all(debug_assertions, feature = "input-test"))]
-            let preload = !input_test::active();
-            #[cfg(not(all(debug_assertions, feature = "input-test")))]
-            let preload = true;
-            if preload {
-                dictation::preload(&settings);
-                assistant::sync(app.handle(), &settings);
-            }
+            dictation::preload(app.handle(), &settings);
+            assistant::sync(app.handle(), &settings);
             app.state::<SharedSettings>().set(settings);
-
-            #[cfg(all(debug_assertions, feature = "input-test"))]
-            if input_test::active() {
-                input_test::start(app.handle().clone());
-            }
 
             let (hook, events) =
                 talk_key_state::start(&hold_key, &toggle_key).map_err(std::io::Error::other)?;
@@ -157,9 +147,7 @@ fn main() {
                 "talk keys installed: hold={hold_key} toggle={toggle_key}"
             ));
             #[cfg(all(debug_assertions, feature = "input-test"))]
-            if input_test::active() {
-                println!("YAP_TEST hotkey_ready");
-            }
+            input_test::listen(app.handle().clone());
             dictation::run_talk_key_events(app.handle().clone(), events);
 
             if platform::launched_in_background()

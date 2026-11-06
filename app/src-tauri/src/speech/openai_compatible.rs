@@ -6,7 +6,7 @@ use reqwest::Url;
 use reqwest::blocking::{Client, multipart};
 
 use super::{SpeechProvider, Transcript};
-use crate::credential_store;
+use crate::credential_store::{self, CredentialStore};
 
 const MAX_RESPONSE_BYTES: u64 = 1_048_576;
 
@@ -28,8 +28,10 @@ impl OpenAiCompatible {
         endpoint: &str,
         api_key_env: Option<&str>,
         language: Option<&str>,
+        credentials: &dyn CredentialStore,
     ) -> Result<Self, String> {
-        let api_key = credential_store::read(&credential_store::remote_target(endpoint)?)?
+        let api_key = credentials
+            .read(&credential_store::remote_target(endpoint)?)?
             .or_else(|| api_key_env.and_then(|name| std::env::var(name).ok()))
             .filter(|value| !value.trim().is_empty());
         if api_key.is_none()
@@ -48,12 +50,14 @@ impl OpenAiCompatible {
         provider: &str,
         base_url: &str,
         language: Option<&str>,
+        credentials: &dyn CredentialStore,
     ) -> Result<Self, String> {
         let details = super::cloud::provider(provider)
             .filter(|details| details.supported)
             .ok_or("This cloud provider is not supported yet")?;
         let endpoint = super::cloud::endpoint(provider, &model_id, base_url)?;
-        let api_key = credential_store::read(&credential_store::cloud_target(provider, base_url)?)?
+        let api_key = credentials
+            .read(&credential_store::cloud_target(provider, base_url)?)?
             .filter(|value| !value.trim().is_empty());
         // A custom server may not need a key; hosted providers always do.
         if api_key.is_none() && provider != "custom" {
@@ -240,6 +244,26 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::Arc;
 
+    struct NoCredentials;
+
+    impl CredentialStore for NoCredentials {
+        fn read(&self, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn write(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("Read-only".to_owned())
+        }
+
+        fn delete(&self, _: &str) -> Result<(), String> {
+            Err("Read-only".to_owned())
+        }
+    }
+
+    fn with_endpoint(endpoint: &str, language: Option<&str>) -> Result<OpenAiCompatible, String> {
+        OpenAiCompatible::new("whisper-1".into(), endpoint, None, language, &NoCredentials)
+    }
+
     #[test]
     fn wav_encodes_sixteen_kilohertz_mono() {
         let bytes = wav(&[0.0, 1.0]).unwrap();
@@ -252,8 +276,20 @@ mod tests {
 
     #[test]
     fn rejects_invalid_endpoints_and_missing_model() {
-        assert!(OpenAiCompatible::new("model".into(), "file:///tmp/audio", None, None).is_err());
-        assert!(OpenAiCompatible::new("".into(), "https://example.com", None, None).is_err());
+        assert!(
+            OpenAiCompatible::new(
+                "model".into(),
+                "file:///tmp/audio",
+                None,
+                None,
+                &NoCredentials
+            )
+            .is_err()
+        );
+        assert!(
+            OpenAiCompatible::new("".into(), "https://example.com", None, None, &NoCredentials)
+                .is_err()
+        );
     }
 
     fn server_response(
@@ -312,8 +348,7 @@ mod tests {
     fn posts_multipart_audio_and_parses_transcript() {
         let (endpoint, server) =
             server_response(200, b"{\"text\":\"hello\"}".to_vec(), Duration::ZERO);
-        let mut provider =
-            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        let mut provider = with_endpoint(&endpoint, None).unwrap();
         let transcript = provider
             .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
             .unwrap();
@@ -337,8 +372,7 @@ mod tests {
     fn sends_language_only_when_one_is_chosen() {
         let (endpoint, server) =
             server_response(200, b"{\"text\":\"hola\"}".to_vec(), Duration::ZERO);
-        let mut provider =
-            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, Some("es")).unwrap();
+        let mut provider = with_endpoint(&endpoint, Some("es")).unwrap();
         provider
             .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
             .unwrap();
@@ -348,8 +382,7 @@ mod tests {
 
         let (endpoint, server) =
             server_response(200, b"{\"text\":\"hi\"}".to_vec(), Duration::ZERO);
-        let mut provider =
-            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        let mut provider = with_endpoint(&endpoint, None).unwrap();
         provider
             .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
             .unwrap();
@@ -360,11 +393,11 @@ mod tests {
     #[test]
     fn connection_check_accepts_an_empty_transcript() {
         let (endpoint, server) = server_response(200, b"{\"text\":\"\"}".to_vec(), Duration::ZERO);
-        let provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        let provider = with_endpoint(&endpoint, None).unwrap();
         assert!(provider.check().is_ok());
         server.join().unwrap();
         let (endpoint, server) = server_response(401, b"no".to_vec(), Duration::ZERO);
-        let provider = OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        let provider = with_endpoint(&endpoint, None).unwrap();
         assert!(provider.check().unwrap_err().contains("credentials"));
         server.join().unwrap();
     }
@@ -385,8 +418,7 @@ mod tests {
             ),
         ] {
             let (endpoint, server) = server_response(status, body, Duration::ZERO);
-            let mut provider =
-                OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+            let mut provider = with_endpoint(&endpoint, None).unwrap();
             let error = provider
                 .transcribe(&[0.01; 1_600], &AtomicBool::new(false))
                 .unwrap_err();
@@ -402,8 +434,7 @@ mod tests {
             b"{\"text\":\"late\"}".to_vec(),
             Duration::from_millis(100),
         );
-        let mut provider =
-            OpenAiCompatible::new("whisper-1".into(), &endpoint, None, None).unwrap();
+        let mut provider = with_endpoint(&endpoint, None).unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel = Arc::clone(&cancelled);
         let worker = std::thread::spawn(move || provider.transcribe(&[0.01; 1_600], &cancel));

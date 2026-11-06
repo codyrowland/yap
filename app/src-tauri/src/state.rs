@@ -21,8 +21,6 @@ pub enum Target {
 pub struct Session {
     pub capture: Option<audio::Capture>,
     pub coordinator: Coordinator<Option<Target>>,
-    #[cfg(all(debug_assertions, feature = "input-test"))]
-    pub test_audio: audio::Fixture,
 }
 
 pub type SessionState = Arc<Mutex<Session>>;
@@ -33,8 +31,6 @@ impl Session {
         Self {
             capture: None,
             coordinator: Coordinator::default(),
-            #[cfg(all(debug_assertions, feature = "input-test"))]
-            test_audio: audio::Fixture::Speech,
         }
     }
 

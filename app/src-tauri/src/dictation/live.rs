@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager};
 use yap_app::speech::{self, SpeechConfig};
 
-use super::engines;
+use super::engines::Engines;
 use crate::state::SessionState;
 use crate::{audio, overlay};
 
@@ -17,20 +17,23 @@ struct Live {
     fed: usize,
 }
 
-static LIVE: Mutex<Option<Live>> = Mutex::new(None);
+#[derive(Default)]
+pub struct LiveState(Mutex<Option<Live>>);
 
-fn take(id: u64) -> Option<Live> {
-    let mut live = LIVE.lock().ok()?;
-    if live.as_ref().is_some_and(|live| live.id == id) {
-        live.take()
-    } else {
-        None
+impl LiveState {
+    fn take(&self, id: u64) -> Option<Live> {
+        let mut live = self.0.lock().ok()?;
+        if live.as_ref().is_some_and(|live| live.id == id) {
+            live.take()
+        } else {
+            None
+        }
     }
-}
 
-pub(super) fn clear() {
-    if let Ok(mut live) = LIVE.lock() {
-        *live = None;
+    pub(super) fn clear(&self) {
+        if let Ok(mut live) = self.0.lock() {
+            *live = None;
+        }
     }
 }
 
@@ -52,18 +55,20 @@ pub(super) fn start(
                 .lock()
                 .is_ok_and(|session| session.coordinator.is_active(id) && session.capture.is_some())
         };
-        let Ok(mut engine) = engines::take(&speech, &language) else {
+        let engines = app.state::<Engines>();
+        let Ok(mut engine) = engines.take(&speech, &language) else {
             return;
         };
         let session = engine.start_live();
-        engines::keep(&speech, language, engine);
+        engines.keep(&speech, language, engine);
         let Some(session) = session else {
             return;
         };
         if !still_recording(&app) {
             return;
         }
-        if let Ok(mut live) = LIVE.lock() {
+        let state = app.state::<LiveState>();
+        if let Ok(mut live) = state.0.lock() {
             *live = Some(Live {
                 id,
                 session,
@@ -79,7 +84,7 @@ pub(super) fn start(
                 .lock()
                 .is_ok_and(|session| session.coordinator.is_active(id));
             let text = {
-                let Ok(mut slot) = LIVE.lock() else {
+                let Ok(mut slot) = state.0.lock() else {
                     return;
                 };
                 let Some(live) = slot.as_mut().filter(|live| live.id == id) else {
@@ -103,12 +108,13 @@ pub(super) fn start(
 }
 
 pub(super) fn finish(
+    live: &LiveState,
     id: u64,
     samples: &[f32],
     sample_rate: u32,
     cancelled: &AtomicBool,
 ) -> Option<Result<String, String>> {
-    let live = take(id)?;
+    let live = live.take(id)?;
     let mut session = live.session;
     session.feed(sample_rate, samples.get(live.fed..).unwrap_or_default());
     if cancelled.load(Ordering::Relaxed) {

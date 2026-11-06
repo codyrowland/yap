@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
+use crate::credential_store::CredentialStore;
+
 pub mod cloud;
 pub mod openai_compatible;
 #[cfg(feature = "local-sherpa")]
@@ -97,6 +99,7 @@ pub trait LiveSession: Send {
 pub fn load_provider(
     config: &SpeechConfig,
     language: Option<&str>,
+    credentials: &dyn CredentialStore,
 ) -> Result<Box<dyn SpeechProvider>, String> {
     match config {
         #[cfg(feature = "local-whisper")]
@@ -146,6 +149,7 @@ pub fn load_provider(
             endpoint,
             api_key_env.as_deref(),
             language,
+            credentials,
         )?)),
         SpeechConfig::Cloud {
             provider,
@@ -156,6 +160,7 @@ pub fn load_provider(
             provider,
             base_url,
             language,
+            credentials,
         )?)),
     }
 }
@@ -166,6 +171,22 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     struct FakeSpeech;
+
+    struct NoCredentials;
+
+    impl CredentialStore for NoCredentials {
+        fn read(&self, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn write(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("Read-only".to_owned())
+        }
+
+        fn delete(&self, _: &str) -> Result<(), String> {
+            Err("Read-only".to_owned())
+        }
+    }
 
     impl SpeechProvider for FakeSpeech {
         fn transcribe(&mut self, _: &[f32], cancelled: &AtomicBool) -> Result<Transcript, String> {
@@ -187,7 +208,7 @@ mod tests {
             model_id: "test".to_owned(),
             artifact: "missing.bin".into(),
         };
-        assert!(load_provider(&config, None).is_err());
+        assert!(load_provider(&config, None, &NoCredentials).is_err());
         assert!(
             load_provider(
                 &SpeechConfig::Cloud {
@@ -195,7 +216,8 @@ mod tests {
                     model_id: "test".to_owned(),
                     base_url: String::new(),
                 },
-                None
+                None,
+                &NoCredentials
             )
             .is_err()
         );
@@ -206,7 +228,8 @@ mod tests {
                     endpoint: "not a URL".to_owned(),
                     api_key_env: None,
                 },
-                None
+                None,
+                &NoCredentials
             )
             .is_err()
         );

@@ -6,6 +6,7 @@ use windows as imp;
 use std::process::ExitStatus;
 
 use tauri::WebviewWindow;
+use yap_app::credential_store::CredentialStore;
 
 pub use imp::field_watch::FieldWatch;
 pub use imp::helper_process::HelperProcess;
@@ -60,6 +61,10 @@ pub fn undo() -> bool {
 
 pub fn accessibility_ready() -> bool {
     imp::input::accessibility_ready()
+}
+
+pub fn credential_store() -> &'static dyn CredentialStore {
+    &imp::credentials::CredentialManager
 }
 
 pub fn set_open_at_login(enabled: bool) -> Result<(), String> {
