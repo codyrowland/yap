@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
 use crate::state::{SessionState, SharedSettings, Target};
-use crate::{platform_input, talk_key_state};
+use crate::{platform, talk_key_state};
 
 pub const LABEL: &str = "overlay";
 const WIDTH: f64 = 440.0;
@@ -269,12 +269,7 @@ pub async fn overlay_undo(
         && tauri::async_runtime::spawn_blocking(move || match last.destination {
             Some(Target::Yap) => crate::own_window::undo(&handle, last.id).is_ok(),
             Some(Target::App(destination)) => {
-                platform_input::destination_verified(
-                    Some(&destination),
-                    platform_input::focused_destination().as_ref(),
-                    true,
-                    platform_input::modifiers_released(),
-                ) && crate::clipboard::undo()
+                platform::still_focused(&destination) && platform::undo()
             }
             None => false,
         })

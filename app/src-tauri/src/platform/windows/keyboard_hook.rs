@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetForegroundWindow, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
-    LLKHF_INJECTED, MSG, PM_REMOVE, PeekMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, DispatchMessageW, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
+    PM_REMOVE, PeekMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use yap_app::talk_keys::{Key, Modifier, Side};
 
@@ -147,15 +147,6 @@ fn trace(entry: Trace) {
     }
 }
 
-fn yap_in_front() -> bool {
-    unsafe {
-        let window = GetForegroundWindow();
-        let mut process = 0;
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(window, &mut process);
-        !window.is_null() && process == std::process::id()
-    }
-}
-
 fn start_trace_logger() {
     if !cfg!(debug_assertions) {
         return;
@@ -213,16 +204,19 @@ unsafe extern "system" fn hook(code: i32, message: WPARAM, data: LPARAM) -> LRES
             let down = message as u32 == WM_KEYDOWN || message as u32 == WM_SYSKEYDOWN;
             let up = message as u32 == WM_KEYUP || message as u32 == WM_SYSKEYUP;
             let vk = normalize_key(key.vkCode, key.scanCode, key.flags);
-            let outcome = talk_key_state::on_key(key_from_vk(vk), down, up, || unsafe {
-                GetForegroundWindow() as isize
-            });
+            let outcome = talk_key_state::on_key(
+                key_from_vk(vk),
+                down,
+                up,
+                crate::platform::foreground_window,
+            );
             if let Some(outcome) = outcome {
                 if tracing {
                     trace(if outcome.involved {
                         Trace::Key {
                             vk,
                             down,
-                            yap_in_front: yap_in_front(),
+                            yap_in_front: super::input::app_in_front(),
                             capturing: outcome.capturing,
                             active: outcome.active,
                             suppressed: outcome.suppress,
@@ -230,7 +224,7 @@ unsafe extern "system" fn hook(code: i32, message: WPARAM, data: LPARAM) -> LRES
                         }
                     } else {
                         Trace::Other {
-                            yap_in_front: yap_in_front(),
+                            yap_in_front: super::input::app_in_front(),
                         }
                     });
                 }
@@ -240,7 +234,7 @@ unsafe extern "system" fn hook(code: i32, message: WPARAM, data: LPARAM) -> LRES
                 }
             } else if tracing {
                 trace(Trace::Busy {
-                    yap_in_front: yap_in_front(),
+                    yap_in_front: super::input::app_in_front(),
                 });
             }
         } else if tracing {

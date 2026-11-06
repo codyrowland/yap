@@ -10,12 +10,12 @@
 //! - `own_window`  dictation into Yap's own window
 //! - `commands`    Settings / History / tray window commands
 //! - `talk_key_state` talk-key state shared with the platform keyboard hook
-//! - `platform`, `platform_input`, `clipboard`, `audio`, `autostart`: OS I/O
+//! - `platform`    the OS interface; `platform/windows` implements it
+//! - `audio`, `autostart`: OS I/O
 
 mod assistant;
 mod audio;
 mod autostart;
-mod clipboard;
 mod commands;
 mod config;
 mod dictation;
@@ -26,7 +26,6 @@ mod onboarding;
 mod overlay;
 mod own_window;
 mod platform;
-mod platform_input;
 mod state;
 mod talk_key_state;
 mod tray;
@@ -37,14 +36,14 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use yap_app::history::History;
 
-use platform_input::Verifier;
+use platform::FieldWatch;
 use state::{Session, SessionState, SharedSettings};
 
 pub fn shutdown(app: &AppHandle) {
     if let Ok(mut session) = app.state::<SessionState>().lock() {
         drop(session.stop_for_exit());
     }
-    if let Ok(verifier) = app.state::<Arc<Mutex<Verifier>>>().lock() {
+    if let Ok(verifier) = app.state::<Arc<Mutex<FieldWatch>>>().lock() {
         verifier.cancel();
     }
     talk_key_state::finish();
@@ -87,7 +86,7 @@ fn main() {
         .device_event_filter(tauri::DeviceEventFilter::Always)
         .manage(Arc::new(Mutex::new(Session::new())))
         .manage(SharedSettings::default())
-        .manage(Arc::new(Mutex::new(Verifier::start())))
+        .manage(Arc::new(Mutex::new(FieldWatch::start())))
         .manage(Arc::new(Mutex::new(None::<(String, Arc<AtomicBool>)>)))
         .invoke_handler(tauri::generate_handler![
             commands::microphones,

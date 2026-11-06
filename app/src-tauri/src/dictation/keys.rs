@@ -7,15 +7,15 @@ use tauri::{AppHandle, Manager};
 
 use super::{begin_recording, cancel_recording, fail, insert_transcript, notify, stop_recording};
 use crate::overlay::{self, Overlay};
-use crate::platform_input::{self, Verifier};
+use crate::platform::{self, FieldWatch, WindowId};
 use crate::state::{SessionState, Target};
 use crate::{own_window, talk_key_state};
 
-fn on_pressed(handle: &AppHandle, window: isize) {
-    let same_foreground = window != 0 && platform_input::foreground_window_handle() == window;
+fn on_pressed(handle: &AppHandle, window: Option<WindowId>) {
+    let same_foreground = window.is_some() && platform::foreground_window() == window;
     crate::logfile::write(&format!(
         "talk key pressed: yap_in_front={} same_foreground={same_foreground} toggle={}",
-        platform_input::app_is_foreground(),
+        platform::app_in_front(),
         talk_key_state::toggle_active()
     ));
     // Yap's own window takes the text directly; anything else is reached
@@ -25,9 +25,9 @@ fn on_pressed(handle: &AppHandle, window: isize) {
     } else if own_window::in_front(handle) {
         Some(Target::Yap)
     } else {
-        platform_input::focused_destination().map(Target::App)
+        platform::focused_destination().map(Target::App)
     };
-    let verifier = Arc::clone(handle.state::<Arc<Mutex<Verifier>>>().inner());
+    let verifier = Arc::clone(handle.state::<Arc<Mutex<FieldWatch>>>().inner());
     if let Err(error) = begin_recording(
         handle.state::<SessionState>().inner(),
         handle,

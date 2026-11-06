@@ -48,7 +48,7 @@ pub fn in_front(app: &AppHandle) -> bool {
 /// of defence. The browser puts the cursor back in the field the user was in
 /// when the page regains focus.
 pub fn insert(app: &AppHandle, id: u64, text: &str) -> Reply {
-    if crate::platform_input::app_is_foreground()
+    if crate::platform::app_in_front()
         && let Some(window) = app.get_webview_window(WINDOW)
     {
         let webview: &tauri::Webview = window.as_ref();

@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use yap_app::coordinator::Settings as JobSettings;
 
 use crate::overlay::{self, Overlay};
-use crate::platform_input::Verifier;
+use crate::platform::FieldWatch;
 use crate::state::{SessionState, SharedSettings, Target, lock};
 use crate::{audio, talk_key_state};
 
@@ -34,7 +34,7 @@ pub fn begin_recording(
     session: &SessionState,
     app: &AppHandle,
     destination: Option<Target>,
-    verifier: Option<&Arc<Mutex<Verifier>>>,
+    verifier: Option<&Arc<Mutex<FieldWatch>>>,
 ) -> Result<u64, String> {
     let mut session = lock(session)?;
     if !session.idle() {
@@ -251,12 +251,12 @@ pub fn cancel_recording(session: &SessionState, app: &AppHandle) -> Result<(), S
     session.coordinator.cancel_current();
     session.capture = None;
     drop(session);
-    lock(app.state::<Arc<Mutex<Verifier>>>().inner())?.cancel();
+    lock(app.state::<Arc<Mutex<FieldWatch>>>().inner())?.cancel();
     Ok(())
 }
 
 fn fail(app: &AppHandle, message: String) {
-    if let Ok(verifier) = app.state::<Arc<Mutex<Verifier>>>().lock() {
+    if let Ok(verifier) = app.state::<Arc<Mutex<FieldWatch>>>().lock() {
         verifier.cancel();
     }
     talk_key_state::finish();

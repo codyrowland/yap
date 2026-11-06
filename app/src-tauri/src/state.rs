@@ -7,7 +7,7 @@ use yap_app::coordinator::Coordinator;
 use yap_app::settings::Settings;
 
 use crate::audio;
-use crate::platform_input::Destination;
+use crate::platform::Destination;
 
 /// Where a dictation's text goes.
 #[derive(Clone, Debug, PartialEq, Eq)]

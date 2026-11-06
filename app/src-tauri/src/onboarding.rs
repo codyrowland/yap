@@ -6,7 +6,7 @@ use yap_app::settings::Engine;
 
 use crate::config;
 use crate::state::{SessionState, SharedSettings, lock};
-use crate::{audio, platform_input};
+use crate::{audio, platform};
 
 #[tauri::command]
 pub fn onboarding_needed(app: AppHandle) -> Result<bool, String> {
@@ -38,7 +38,7 @@ pub fn onboarding_permissions(index: usize) -> PermissionStatus {
     PermissionStatus {
         microphone: microphone.is_ok(),
         microphone_error: microphone.err(),
-        accessibility: platform_input::accessibility_ready(),
+        accessibility: platform::accessibility_ready(),
     }
 }
 

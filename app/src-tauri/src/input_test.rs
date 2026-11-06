@@ -12,7 +12,7 @@ use yap_app::speech::SpeechConfig;
 
 use crate::audio;
 use crate::dictation::{cancel_recording, insert_transcript};
-use crate::platform_input::{self, Verifier};
+use crate::platform::{self, FieldWatch};
 use crate::state::SessionState;
 
 pub fn active() -> bool {
@@ -53,7 +53,7 @@ pub fn start(app: AppHandle) {
                     if !controlled_window() {
                         Err("Controlled test window is not foreground".to_owned())
                     } else {
-                        let destination = platform_input::focused_destination();
+                        let destination = platform::focused_destination();
                         let target = destination.clone().map(crate::state::Target::App);
                         let state = app.state::<SessionState>();
                         let mut session = state.lock().unwrap();
@@ -77,7 +77,7 @@ pub fn start(app: AppHandle) {
                                 )
                                 .unwrap();
                             last_id = Some(id);
-                            app.state::<Arc<Mutex<Verifier>>>()
+                            app.state::<Arc<Mutex<FieldWatch>>>()
                                 .lock()
                                 .unwrap()
                                 .capture(id, destination);

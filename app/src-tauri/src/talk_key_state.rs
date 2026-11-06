@@ -2,11 +2,12 @@ use std::sync::{Mutex, MutexGuard, OnceLock, mpsc};
 
 use yap_app::talk_keys::{self, Key, Shortcut, TalkKey, TalkKeys};
 
+use crate::platform::WindowId;
 use crate::platform::keyboard_hook::{self, KeyboardHook};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Event {
-    Pressed(isize),
+    Pressed(Option<WindowId>),
     Released,
     Cancelled,
 }
@@ -76,7 +77,7 @@ pub fn on_key(
     key: Key,
     down: bool,
     up: bool,
-    foreground: impl FnOnce() -> isize,
+    foreground: impl FnOnce() -> Option<WindowId>,
 ) -> Option<KeyOutcome> {
     let mut state = STATE.get()?.try_lock().ok()?;
     let (suppress, event) = state.handle(key, down, up);

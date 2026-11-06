@@ -21,6 +21,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
 };
 
+use crate::platform::PasteResult;
+
 const VK_V: VIRTUAL_KEY = 0x56;
 const VK_Z: VIRTUAL_KEY = 0x5A;
 /// How long the target app gets to read the clipboard before it is restored.
@@ -170,13 +172,6 @@ fn chord(letter: VIRTUAL_KEY) -> bool {
             size_of::<INPUT>() as i32,
         ) == inputs.len() as u32
     }
-}
-
-pub enum PasteResult {
-    Pasted,
-    /// The clipboard held something that cannot be restored; nothing was sent.
-    Unavailable,
-    Failed,
 }
 
 /// Pastes `text` into the focused field and restores the previous clipboard

@@ -1,5 +1,7 @@
-#[path = "../platform_input.rs"]
-mod platform_input;
+#[path = "../platform/windows/field_watch.rs"]
+mod field_watch;
+#[path = "../platform/windows/input.rs"]
+mod input;
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -210,7 +212,7 @@ impl TestWindow {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if unsafe { GetForegroundWindow() } == window
-                && platform_input::focused_destination().is_some()
+                && input::focused_destination().is_some()
                 && focused_field() == field
             {
                 return Ok(());
@@ -503,24 +505,25 @@ fn focused_field() -> HWND {
     }
 }
 
+fn verified(original: &input::Destination, watched: bool) -> bool {
+    watched
+        && input::modifiers_released()
+        && original.safe_to_insert(input::focused_destination().as_ref())
+}
+
 fn run() -> Result<(), String> {
     let mut test = TestWindow::start()?;
-    let verifier = platform_input::Verifier::start();
+    let verifier = field_watch::FieldWatch::start();
     test.focus(1)?;
-    let original = platform_input::focused_destination().ok_or("No original field")?;
+    let original = input::focused_destination().ok_or("No original field")?;
     verifier.capture(1, Some(original.clone()));
     thread::sleep(Duration::from_millis(150));
-    if !platform_input::destination_verified(
-        Some(&original),
-        platform_input::focused_destination().as_ref(),
-        verifier.check_reason(1).is_ok(),
-        platform_input::modifiers_released(),
-    ) {
+    if !verified(&original, verifier.check(1).is_ok()) {
         return Err("Native field was not verified".to_owned());
     }
 
     let sample = "Yap ✓\nSecond line";
-    if !platform_input::insert_unicode(sample) {
+    if !input::type_text(sample) {
         return Err("Unicode input submission failed".to_owned());
     }
     test.wait_text(1, "Yap ✓\r\nSecond line")?;
@@ -530,27 +533,17 @@ fn run() -> Result<(), String> {
     thread::sleep(Duration::from_millis(150));
     test.focus(2)?;
     thread::sleep(Duration::from_millis(150));
-    let safe = platform_input::destination_verified(
-        Some(&original),
-        platform_input::focused_destination().as_ref(),
-        verifier.check_reason(2).is_ok(),
-        platform_input::modifiers_released(),
-    );
+    let safe = verified(&original, verifier.check(2).is_ok());
     if safe || !test.text(2).is_empty() {
         return Err("Focus change did not fail closed".to_owned());
     }
     println!("PASS changed field rejected without insertion");
 
     test.focus(3)?;
-    let password = platform_input::focused_destination().ok_or("No secure field")?;
+    let password = input::focused_destination().ok_or("No secure field")?;
     verifier.capture(3, Some(password.clone()));
     thread::sleep(Duration::from_millis(150));
-    if platform_input::destination_verified(
-        Some(&password),
-        platform_input::focused_destination().as_ref(),
-        verifier.check_reason(3).is_ok(),
-        platform_input::modifiers_released(),
-    ) {
+    if verified(&password, verifier.check(3).is_ok()) {
         return Err("Password field was accepted".to_owned());
     }
     println!("PASS password field rejected");

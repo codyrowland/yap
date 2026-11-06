@@ -10,9 +10,9 @@ use yap_app::settings::Insertion;
 
 use super::{history, notify};
 use crate::overlay::{self, Overlay};
-use crate::platform_input::{self, Destination, Verifier};
+use crate::platform::{self, FieldWatch, PasteResult};
 use crate::state::{SessionState, SharedSettings, Target};
-use crate::{clipboard, own_window, talk_key_state};
+use crate::{own_window, talk_key_state};
 
 /// A finished insertion, for the overlay and History.
 struct Inserted {
@@ -121,13 +121,13 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
                     .lock()
                     .is_ok_and(|session| session.coordinator.is_active(id))
             },
-            platform_input::modifiers_released,
+            platform::modifiers_released,
             Duration::from_secs(1),
         )
     })
     .await
     .unwrap_or(false);
-    let verifier = Arc::clone(app.state::<Arc<Mutex<Verifier>>>().inner());
+    let verifier = Arc::clone(app.state::<Arc<Mutex<FieldWatch>>>().inner());
     let verified = tauri::async_runtime::spawn_blocking(move || field_watch_passed(&verifier, id))
         .await
         .unwrap_or(false);
@@ -142,7 +142,7 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
             Some(Some(Target::App(field))) => Some(field),
             _ => None,
         };
-        let safe = verified && modifiers_ready && still_focused(original);
+        let safe = verified && modifiers_ready && original.is_some_and(platform::still_focused);
         let decision = session.coordinator.begin_insert(id, safe);
         (decision, app.state::<SharedSettings>().get().insertion)
     };
@@ -163,7 +163,7 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
         let ready = state
             .lock()
             .is_ok_and(|session| !session.coordinator.closed())
-            && still_focused(Some(&target));
+            && platform::still_focused(&target);
         ready && send_text(&typed, method)
     })
     .await
@@ -204,35 +204,26 @@ fn wait_for_modifiers(
     }
 }
 
-fn field_watch_passed(verifier: &Mutex<Verifier>, id: u64) -> bool {
+fn field_watch_passed(verifier: &Mutex<FieldWatch>, id: u64) -> bool {
     let verified = verifier
         .lock()
         .map_err(|error| error.to_string())
-        .and_then(|verifier| verifier.check_reason(id));
+        .and_then(|verifier| verifier.check(id));
     if let Err(why) = &verified {
         crate::logfile::write(&format!("insert {id}: field check failed: {why}"));
     }
     verified.is_ok()
 }
 
-fn still_focused(original: Option<&Destination>) -> bool {
-    platform_input::destination_verified(
-        original,
-        platform_input::focused_destination().as_ref(),
-        true,
-        platform_input::modifiers_released(),
-    )
-}
-
 /// Inserts `text` with the configured method. Paste falls back to typing when
 /// the clipboard holds something Yap could not restore (an image, files).
 fn send_text(text: &str, method: Insertion) -> bool {
     match method {
-        Insertion::Type => platform_input::insert_unicode(text),
-        Insertion::Paste => match clipboard::paste(text) {
-            clipboard::PasteResult::Pasted => true,
-            clipboard::PasteResult::Unavailable => platform_input::insert_unicode(text),
-            clipboard::PasteResult::Failed => false,
+        Insertion::Type => platform::type_text(text),
+        Insertion::Paste => match platform::paste(text) {
+            PasteResult::Pasted => true,
+            PasteResult::Unavailable => platform::type_text(text),
+            PasteResult::Failed => false,
         },
     }
 }
