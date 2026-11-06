@@ -5,7 +5,6 @@ use tauri::{AppHandle, Manager, State};
 use yap_app::settings::Engine;
 
 use crate::config;
-use crate::dictation::speech_config;
 use crate::state::{SessionState, SharedSettings, lock};
 use crate::{audio, platform_input};
 
@@ -69,7 +68,7 @@ fn finish_onboarding(session: &SessionState, app: &AppHandle) -> Result<(), Stri
         return Err("Select a downloaded model before finishing".to_owned());
     }
     settings.validate()?;
-    speech_config(&settings)?;
+    settings.speech_config()?;
 
     drop(session);
     match std::fs::remove_file(config::onboarding_path(app)?) {

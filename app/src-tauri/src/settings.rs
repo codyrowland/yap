@@ -7,10 +7,12 @@
 //! system credential store.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::speech::cloud;
+use crate::models::Family;
+use crate::speech::{self, SpeechConfig, cloud};
 
 pub const CURRENT_VERSION: u32 = 6;
 pub const DEFAULT_HOLD_KEY: &str = "Ctrl+Space";
@@ -128,6 +130,54 @@ impl Settings {
     /// `None` means let the engine detect the language.
     pub fn language_code(&self) -> Option<String> {
         (self.language != "auto").then(|| self.language.clone())
+    }
+
+    /// The engine configuration for one dictation with these settings.
+    pub fn speech_config(&self) -> Result<SpeechConfig, String> {
+        match self.engine {
+            Engine::Local => {
+                let artifact = PathBuf::from(self.local_model_path.clone().unwrap_or_default());
+                if artifact.as_os_str().is_empty() {
+                    return Err("Select an on-device model before dictating".to_owned());
+                }
+                let model = crate::models::for_path(&artifact);
+                let model_id = model.map_or_else(
+                    || {
+                        artifact
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "unselected".to_owned())
+                    },
+                    |model| model.id.to_owned(),
+                );
+                let adapter = match model.map(|model| model.family) {
+                    Some(Family::Parakeet | Family::Moonshine) => speech::SHERPA_OFFLINE,
+                    Some(Family::Nemotron) => speech::SHERPA_STREAMING,
+                    // Unknown files are treated as whisper.cpp models, as before.
+                    Some(Family::Whisper) | None => speech::WHISPER_CPP,
+                };
+                Ok(SpeechConfig::Local {
+                    adapter: adapter.to_owned(),
+                    model_id,
+                    artifact,
+                })
+            }
+            Engine::Cloud => Ok(SpeechConfig::Cloud {
+                provider: self.cloud_provider.clone(),
+                model_id: self.cloud_model(),
+                base_url: self.custom_base_url.clone(),
+            }),
+            Engine::Remote => {
+                if self.remote_endpoint.trim().is_empty() || self.remote_model.trim().is_empty() {
+                    return Err("Enter a server URL and model".to_owned());
+                }
+                Ok(SpeechConfig::OpenAiCompatible {
+                    model_id: self.remote_model.clone(),
+                    endpoint: self.remote_endpoint.clone(),
+                    api_key_env: self.remote_api_key_env.clone(),
+                })
+            }
+        }
     }
 
     /// Checks values that do not depend on the platform. Talk-key syntax is
@@ -435,5 +485,43 @@ mod tests {
     fn legacy_rejects_truncated_files() {
         assert!(Settings::from_legacy("Yap settings v1\nshortcut=F1").is_err());
         assert!(Settings::from_legacy("").is_err());
+    }
+
+    #[test]
+    fn speech_config_follows_the_selected_engine() {
+        let mut settings = Settings::default();
+        assert!(settings.speech_config().is_err());
+        settings.local_model_path = Some(r"C:\models\ggml-base.bin".into());
+        assert!(matches!(
+            settings.speech_config(),
+            Ok(SpeechConfig::Local { model_id, adapter, .. })
+                if model_id == "base" && adapter == "whisper.cpp"
+        ));
+        settings.local_model_path = Some(r"C:\models\parakeet-tdt-0.6b-v3".into());
+        assert!(matches!(
+            settings.speech_config(),
+            Ok(SpeechConfig::Local { model_id, adapter, .. })
+                if model_id == "parakeet-tdt-0.6b-v3" && adapter == "sherpa-onnx"
+        ));
+        settings.local_model_path = Some(r"C:\models\my-finetune.bin".into());
+        assert!(matches!(
+            settings.speech_config(),
+            Ok(SpeechConfig::Local { adapter, .. }) if adapter == "whisper.cpp"
+        ));
+        settings.engine = Engine::Cloud;
+        settings.cloud_provider = "groq".into();
+        assert!(matches!(
+            settings.speech_config(),
+            Ok(SpeechConfig::Cloud { provider, model_id, .. })
+                if provider == "groq" && model_id == "whisper-large-v3-turbo"
+        ));
+        settings.engine = Engine::Remote;
+        assert!(settings.speech_config().is_err());
+        settings.remote_endpoint = "https://asr.home.lan/v1/audio/transcriptions".into();
+        settings.remote_model = "large-v3".into();
+        assert!(matches!(
+            settings.speech_config(),
+            Ok(SpeechConfig::OpenAiCompatible { .. })
+        ));
     }
 }
