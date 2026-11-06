@@ -1,6 +1,6 @@
 use std::mem::size_of;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
@@ -108,11 +108,12 @@ pub fn focused_destination() -> Option<Destination> {
             return None;
         }
 
+        // Yap's own windows are valid targets too (onboarding's "Try it" box,
+        // History search). Their sensitive fields are still refused: API-key
+        // and token inputs are password fields, and the talk-key field is a
+        // button, not an edit control (see `Verifier`).
         let mut process = 0;
         let thread = GetWindowThreadProcessId(window, &mut process);
-        if process == std::process::id() {
-            return None;
-        }
 
         let mut info = GUITHREADINFO {
             cbSize: size_of::<GUITHREADINFO>() as u32,
@@ -151,6 +152,41 @@ fn same_element(automation: &IUIAutomation, original: &IUIAutomationElement) -> 
     }
 }
 
+/// The focused UI Automation element, if it is a non-password edit field
+/// that has keyboard focus. The error says what was found instead.
+fn focused_edit(automation: &IUIAutomation) -> Result<IUIAutomationElement, String> {
+    unsafe {
+        let focused = automation
+            .GetFocusedElement()
+            .map_err(|error| format!("no focused element ({error})"))?;
+        let kind = focused
+            .CurrentControlType()
+            .map_err(|error| error.to_string())?;
+        if kind != UIA_EditControlTypeId {
+            return Err(format!("focused element is control type {}", kind.0));
+        }
+        if focused
+            .CurrentIsPassword()
+            .map_or(true, |flag| flag.as_bool())
+        {
+            return Err("focused field is a password field".to_owned());
+        }
+        if !focused
+            .CurrentHasKeyboardFocus()
+            .is_ok_and(|flag| flag.as_bool())
+        {
+            return Err("focused field has no keyboard focus".to_owned());
+        }
+        Ok(focused)
+    }
+}
+
+/// How long a field that isn't a native edit control may take to show up in
+/// UI Automation. Chromium-based windows (WebView2, Electron) build their
+/// accessibility tree only when first asked, so the first query often
+/// returns the page instead of the field.
+const FIELD_GRACE: Duration = Duration::from_millis(1500);
+
 enum Command {
     Capture(u64, Option<Destination>),
     Check(u64),
@@ -159,12 +195,21 @@ enum Command {
 
 pub struct Outcome {
     pub id: u64,
-    pub verified: bool,
+    pub verified: Result<(), String>,
 }
 
 pub struct Verifier {
     commands: Sender<Command>,
     results: Receiver<Outcome>,
+}
+
+/// What the verifier watches for one recording.
+struct Watch {
+    id: u64,
+    target: Destination,
+    element: Option<IUIAutomationElement>,
+    started: Instant,
+    last_miss: String,
 }
 
 impl Verifier {
@@ -179,62 +224,79 @@ impl Verifier {
             let automation: windows::core::Result<IUIAutomation> =
                 CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER);
             if let Ok(automation) = automation {
-                let mut original: Option<Destination> = None;
-                let mut element: Option<IUIAutomationElement> = None;
-                let mut active_id = 0;
-                let mut changed = false;
+                // `Err` holds why the current recording can no longer insert.
+                let mut watch: Result<Watch, (u64, String)> = Err((0, "not started".to_owned()));
+                // Re-checks the watched field; returns why it is no longer valid.
+                let refresh = |watch: &mut Watch| -> Result<(), String> {
+                    if Some(&watch.target) != focused_destination().as_ref() {
+                        return Err("focus moved to another window or control".to_owned());
+                    }
+                    if watch.target.native_edit() {
+                        return Ok(());
+                    }
+                    match &watch.element {
+                        Some(first) if same_element(&automation, first) => Ok(()),
+                        Some(_) => Err("focus moved to another field".to_owned()),
+                        None => match focused_edit(&automation) {
+                            Ok(element) => {
+                                watch.element = Some(element);
+                                Ok(())
+                            }
+                            Err(miss) if watch.started.elapsed() < FIELD_GRACE => {
+                                watch.last_miss = miss;
+                                Ok(())
+                            }
+                            Err(miss) => Err(format!("no text field found: {miss}")),
+                        },
+                    }
+                };
                 loop {
                     match requests.recv_timeout(Duration::from_millis(50)) {
                         Ok(Command::Capture(id, target)) => {
-                            active_id = id;
-                            changed = target.is_none() || target != focused_destination();
-                            original = target;
-                            element = None;
-                            if let Some(target) = original.as_ref()
-                                && !target.native_edit()
-                                && !changed
-                                && let Ok(focused) = automation.GetFocusedElement()
-                                && focused.CurrentControlType() == Ok(UIA_EditControlTypeId)
-                                && focused
-                                    .CurrentIsPassword()
-                                    .is_ok_and(|flag| !flag.as_bool())
-                                && focused
-                                    .CurrentHasKeyboardFocus()
-                                    .is_ok_and(|flag| flag.as_bool())
-                            {
-                                element = Some(focused);
-                            }
+                            watch = match target {
+                                None => Err((id, "no focused control".to_owned())),
+                                Some(target) if target.password => {
+                                    Err((id, "password field".to_owned()))
+                                }
+                                Some(target) => {
+                                    let mut next = Watch {
+                                        id,
+                                        target,
+                                        element: None,
+                                        started: Instant::now(),
+                                        last_miss: String::new(),
+                                    };
+                                    refresh(&mut next).map(|()| next).map_err(|why| (id, why))
+                                }
+                            };
                         }
                         Ok(Command::Check(id)) => {
-                            let verified = id == active_id
-                                && !changed
-                                && original.as_ref().is_some_and(|target| {
-                                    !target.password
-                                        && Some(target) == focused_destination().as_ref()
-                                        && (target.native_edit()
-                                            || element.as_ref().is_some_and(|first| {
-                                                same_element(&automation, first)
-                                            }))
-                                });
+                            let verified = match &mut watch {
+                                Ok(current) if current.id == id => match refresh(current) {
+                                    Ok(())
+                                        if current.target.native_edit()
+                                            || current.element.is_some() =>
+                                    {
+                                        Ok(())
+                                    }
+                                    Ok(()) => Err(format!(
+                                        "no text field found yet: {}",
+                                        current.last_miss
+                                    )),
+                                    Err(why) => Err(why),
+                                },
+                                Err((watched, why)) if *watched == id => Err(why.clone()),
+                                _ => Err("a different recording was being watched".to_owned()),
+                            };
                             let _ = responses.send(Outcome { id, verified });
-                            original = None;
-                            element = None;
+                            watch = Err((0, "not started".to_owned()));
                         }
-                        Ok(Command::Cancel) => {
-                            original = None;
-                            element = None;
-                        }
+                        Ok(Command::Cancel) => watch = Err((0, "cancelled".to_owned())),
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            if let Some(target) = original.as_ref()
-                                && (Some(target) != focused_destination().as_ref()
-                                    || (!target.native_edit()
-                                        && !element
-                                            .as_ref()
-                                            .is_some_and(|first| same_element(&automation, first))))
+                            if let Ok(current) = &mut watch
+                                && let Err(why) = refresh(current)
                             {
-                                changed = true;
-                                original = None;
-                                element = None;
+                                watch = Err((current.id, why));
                             }
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -255,14 +317,21 @@ impl Verifier {
         let _ = self.commands.send(Command::Cancel);
     }
 
-    pub fn check(&self, id: u64) -> bool {
-        if self.commands.send(Command::Check(id)).is_err() {
-            return false;
+    /// Whether recording `id` may insert; the error says why not.
+    pub fn check_reason(&self, id: u64) -> Result<(), String> {
+        self.commands
+            .send(Command::Check(id))
+            .map_err(|_| "verifier stopped".to_owned())?;
+        loop {
+            let outcome = self
+                .results
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| "verifier timed out".to_owned())?;
+            // Skip answers to earlier checks that arrived too late.
+            if outcome.id == id {
+                return outcome.verified;
+            }
         }
-
-        self.results
-            .recv_timeout(Duration::from_secs(2))
-            .is_ok_and(|outcome| outcome.id == id && outcome.verified)
     }
 }
 

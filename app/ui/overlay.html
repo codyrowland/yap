@@ -47,6 +47,31 @@
     for (let i = 0; i < BARS; i++) $('wave').append(document.createElement('span'));
     let started = 0;
     let ticker = null;
+    let recording = null;   // the recording state while it lasts
+    let partial = '';
+
+    // Shows the end of the live text: trims from the start until it fits.
+    function fitTail(node, text) {
+      node.textContent = text;
+      if (node.scrollWidth <= node.clientWidth) return;
+      let start = 0;
+      while (start < text.length && node.scrollWidth > node.clientWidth) {
+        start += Math.max(1, Math.floor((text.length - start) / 8));
+        node.textContent = '…' + text.slice(start).trimStart();
+      }
+    }
+
+    function renderRecordingLabel() {
+      if (!recording) return;
+      const live = partial.length > 0;
+      // Live text needs the room the level meter would use.
+      show(['wave'], !live);
+      $('label').style.flex = live || !recording.toggle ? '1' : '0';
+      $('time').style.flex = live || !recording.toggle ? '' : '1';
+      $('label').style.fontWeight = live ? '500' : '600';
+      if (live) fitTail($('label'), partial);
+      else $('label').textContent = recording.toggle ? '' : 'Release to insert';
+    }
 
     const show = (ids, on) => ids.forEach(id => $(id).toggleAttribute('hidden', !on));
     const all = ['rec', 'cpu', 'check', 'warn', 'wave', 'detail', 'time', 'stop', 'undo', 'scan'];
@@ -61,13 +86,15 @@
       show(all, false);
       $('bar').classList.toggle('error', state.state === 'error');
       $('detail').textContent = '';
+      recording = state.state === 'recording' ? state : null;
+      $('label').style.fontWeight = '600';
+      $('time').style.flex = '';
       if (state.state === 'recording') {
         started = Date.now();
         levels.fill(0);
+        partial = '';
         show(['rec', 'wave', 'time'], true);
-        $('label').textContent = state.toggle ? '' : 'Release to insert';
-        $('label').style.flex = state.toggle ? '0' : '1';
-        $('time').style.flex = state.toggle ? '1' : '';
+        renderRecordingLabel();
         show(['stop'], state.toggle);
         tick();
         ticker = setInterval(tick, 250);
@@ -76,6 +103,10 @@
         $('label').style.flex = '1';
         $('label').textContent = 'Transcribing';
         $('detail').textContent = state.model ? `${state.engine} · ${state.model}` : state.engine;
+      } else if (state.state === 'polishing') {
+        show(['cpu', 'scan'], true);
+        $('label').style.flex = '1';
+        $('label').textContent = 'Cleaning up';
       } else if (state.state === 'done') {
         show(['check', 'undo'], true);
         $('label').style.flex = '1';
@@ -89,6 +120,10 @@
     }
 
     listen('overlay-state', ({ payload }) => render(payload));
+    listen('overlay-partial', ({ payload }) => {
+      partial = payload || '';
+      renderRecordingLabel();
+    });
     listen('overlay-level', ({ payload }) => {
       // Scale RMS (speech is roughly 0.01–0.2) to 0–1 with a soft curve.
       levels.shift();

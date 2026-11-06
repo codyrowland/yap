@@ -7,6 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use yap_app::coordinator::Phase;
 use yap_app::history::{Entry, History};
+use yap_app::models::Family;
 use yap_app::settings::{Engine, LANGUAGES, Settings};
 use yap_app::speech::cloud::{self, Provider};
 use yap_app::speech::openai_compatible::OpenAiCompatible;
@@ -43,30 +44,46 @@ pub fn save_settings(
 pub struct Catalog {
     providers: &'static [Provider],
     languages: Vec<(&'static str, &'static str)>,
-    whisper: Vec<WhisperModel>,
+    models: Vec<LocalModel>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WhisperModel {
+pub struct LocalModel {
     id: &'static str,
+    family: Family,
+    label: &'static str,
+    note: &'static str,
     bytes: u64,
+    /// Set once downloaded; this is what `localModelPath` stores.
     path: Option<String>,
+    /// False when this build was compiled without the family's runtime.
+    available: bool,
 }
 
-fn whisper_models(app: &AppHandle) -> Result<Vec<WhisperModel>, String> {
+fn family_available(family: Family) -> bool {
+    match family {
+        Family::Whisper => cfg!(feature = "local-whisper"),
+        Family::Parakeet | Family::Moonshine | Family::Nemotron => cfg!(feature = "local-sherpa"),
+    }
+}
+
+fn local_models(app: &AppHandle) -> Result<Vec<LocalModel>, String> {
     let directory = config::models_path(app)?;
-    Ok(models::WHISPER_MODELS
+    Ok(models::MODELS
         .iter()
-        .map(|model| WhisperModel {
+        .map(|model| LocalModel {
             id: model.id,
+            family: model.family,
+            label: model.label,
+            note: model.note,
             bytes: model.bytes,
             path: models::installed(model, &directory).then(|| {
-                directory
-                    .join(model.filename)
+                models::path(model, &directory)
                     .to_string_lossy()
                     .into_owned()
             }),
+            available: family_available(model.family),
         })
         .collect())
 }
@@ -77,23 +94,29 @@ pub fn catalog(app: AppHandle) -> Result<Catalog, String> {
     Ok(Catalog {
         providers: cloud::PROVIDERS,
         languages: LANGUAGES.to_vec(),
-        whisper: whisper_models(&app)?,
+        models: local_models(&app)?,
     })
 }
 
 #[tauri::command]
 pub fn begin_key_capture(kind: String) -> Result<(), String> {
+    crate::logfile::write(&format!("key capture started ({kind})"));
     hotkey::begin_capture(&kind)
 }
 
 #[tauri::command]
 pub fn cancel_key_capture() -> Result<(), String> {
+    crate::logfile::write("key capture cancelled");
     hotkey::cancel_capture()
 }
 
 #[tauri::command]
 pub fn complete_key_capture(kind: String, shortcut: String) -> Result<(), String> {
-    hotkey::complete_capture(&kind, &shortcut)
+    let result = hotkey::complete_capture(&kind, &shortcut);
+    crate::logfile::write(&format!(
+        "key capture saved ({kind}: {shortcut}): {result:?}"
+    ));
+    result
 }
 
 // ---------- Credentials ----------
@@ -194,11 +217,11 @@ pub fn download_model(
     app: AppHandle,
     downloads: State<'_, ModelDownloadState>,
 ) -> Result<(), String> {
-    if !cfg!(feature = "local-whisper") {
-        return Err("Local Whisper is unavailable in this build".to_owned());
+    let model = models::model(&id).ok_or("Unknown model")?;
+    if !family_available(model.family) {
+        return Err("This model's engine is not included in this build".to_owned());
     }
 
-    let model = models::model(&id).ok_or("Unknown model")?;
     let directory = config::models_path(&app)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     {
@@ -273,8 +296,7 @@ pub fn delete_model(
 ) -> Result<(), String> {
     let model = models::model(&id).ok_or("Unknown model")?;
     let directory = config::models_path(&app)?;
-    let path = directory
-        .join(model.filename)
+    let path = models::path(model, &directory)
         .to_string_lossy()
         .into_owned();
     let settings = {
@@ -297,6 +319,8 @@ pub fn delete_model(
             },
         )?;
     }
+    // Release the model if it is still loaded, so its files can be deleted.
+    crate::dictation::unload();
     models::remove(model, &directory)
 }
 
@@ -309,6 +333,119 @@ pub fn open_models_folder(app: AppHandle) -> Result<(), String> {
         .spawn()
         .map(drop)
         .map_err(|error| error.to_string())
+}
+
+// ---------- Clean-up ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupEntry {
+    #[serde(flatten)]
+    model: &'static yap_app::cleanup::CleanupModel,
+    installed: bool,
+    /// Bytes a download would fetch now (includes the runtime if missing).
+    download_bytes: u64,
+}
+
+#[derive(Serialize)]
+pub struct CleanupCatalog {
+    models: Vec<CleanupEntry>,
+    status: crate::assistant::Status,
+}
+
+#[tauri::command]
+pub fn cleanup_catalog(app: AppHandle) -> Result<CleanupCatalog, String> {
+    let directory = config::models_path(&app)?;
+    Ok(CleanupCatalog {
+        models: yap_app::cleanup::MODELS
+            .iter()
+            .map(|model| CleanupEntry {
+                model,
+                installed: yap_app::cleanup::installed(model, &directory),
+                download_bytes: yap_app::cleanup::download_size(model, &directory),
+            })
+            .collect(),
+        status: crate::assistant::status(),
+    })
+}
+
+/// Downloads a clean-up model (and the llama.cpp runtime the first time).
+/// Progress uses the model events with the id `cleanup:<id>`.
+#[tauri::command]
+pub fn download_cleanup(
+    id: String,
+    app: AppHandle,
+    downloads: State<'_, ModelDownloadState>,
+) -> Result<(), String> {
+    let model = yap_app::cleanup::model(&id).ok_or("Unknown clean-up model")?;
+    let directory = config::models_path(&app)?;
+    let event_id = format!("cleanup:{id}");
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut active = lock(&downloads)?;
+        if active.is_some() {
+            return Err("A model download is already in progress".to_owned());
+        }
+        *active = Some((event_id.clone(), Arc::clone(&cancelled)));
+    }
+    let total = yap_app::cleanup::download_size(model, &directory).max(1);
+    let downloads = Arc::clone(downloads.inner());
+    std::thread::spawn(move || {
+        let mut last_percent = 0;
+        let result = yap_app::cleanup::download(model, &directory, &cancelled, |downloaded| {
+            let percent = downloaded.saturating_mul(100) / total;
+            if percent > last_percent {
+                last_percent = percent;
+                let _ = app.emit(
+                    "model-download-progress",
+                    ModelProgress {
+                        id: event_id.clone(),
+                        downloaded,
+                        total,
+                        state: "downloading",
+                        error: None,
+                    },
+                );
+            }
+        });
+        let (state, error) = match result {
+            Ok(()) => ("ready", None),
+            Err(error) if error == "Cancelled" => ("cancelled", None),
+            Err(error) => ("error", Some(error)),
+        };
+        if let Ok(mut active) = downloads.lock() {
+            *active = None;
+        }
+        let _ = app.emit(
+            "model-download-progress",
+            ModelProgress {
+                id: event_id,
+                downloaded: 0,
+                total,
+                state,
+                error,
+            },
+        );
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_cleanup(
+    id: String,
+    app: AppHandle,
+    session: State<'_, SessionState>,
+) -> Result<(), String> {
+    let model = yap_app::cleanup::model(&id).ok_or("Unknown clean-up model")?;
+    {
+        let session = lock(&session)?;
+        if session.settings.cleanup_enabled && session.settings.cleanup_model == model.id {
+            return Err(
+                "Turn off clean-up or pick the other model before deleting this one".to_owned(),
+            );
+        }
+    }
+    yap_app::cleanup::remove(model, &config::models_path(&app)?)
 }
 
 // ---------- History ----------
@@ -345,17 +482,18 @@ pub struct TrayState {
 }
 
 fn engine_choices(settings: &Settings) -> Vec<EngineChoice> {
-    let local_detail = settings
-        .local_model_path
-        .as_deref()
-        .and_then(|path| std::path::Path::new(path).file_name())
-        .map(|name| {
-            let name = name.to_string_lossy();
-            format!(
-                "Whisper {}",
-                name.trim_start_matches("ggml-").trim_end_matches(".bin")
-            )
-        });
+    let local_detail = settings.local_model_path.as_deref().map(|path| {
+        let path = std::path::Path::new(path);
+        models::for_path(path).map_or_else(
+            || {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            },
+            models::display_name,
+        )
+    });
     let provider = cloud::provider(&settings.cloud_provider);
     let remote_host = reqwest::Url::parse(&settings.remote_endpoint)
         .ok()

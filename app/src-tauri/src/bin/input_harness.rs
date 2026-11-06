@@ -513,7 +513,7 @@ fn run() -> Result<(), String> {
     if !platform_input::destination_verified(
         Some(&original),
         platform_input::focused_destination().as_ref(),
-        verifier.check(1),
+        verifier.check_reason(1).is_ok(),
         platform_input::modifiers_released(),
     ) {
         return Err("Native field was not verified".to_owned());
@@ -533,7 +533,7 @@ fn run() -> Result<(), String> {
     let safe = platform_input::destination_verified(
         Some(&original),
         platform_input::focused_destination().as_ref(),
-        verifier.check(2),
+        verifier.check_reason(2).is_ok(),
         platform_input::modifiers_released(),
     );
     if safe || !test.text(2).is_empty() {
@@ -548,7 +548,7 @@ fn run() -> Result<(), String> {
     if platform_input::destination_verified(
         Some(&password),
         platform_input::focused_destination().as_ref(),
-        verifier.check(3),
+        verifier.check_reason(3).is_ok(),
         platform_input::modifiers_released(),
     ) {
         return Err("Password field was accepted".to_owned());

@@ -16,20 +16,28 @@ pub struct HistoryMeta {
     pub model: String,
 }
 
+/// Where a dictation's text goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// A field in another app, reached through the OS.
+    App(Destination),
+    /// Yap's own window, which inserts the text itself (`own_window`).
+    Yap,
+}
+
 /// The last successful insertion, kept briefly so the overlay can undo it.
 pub struct LastInsert {
-    pub destination: Destination,
+    pub id: u64,
+    pub target: Target,
     pub at: Instant,
 }
 
 pub struct Session {
     pub capture: Option<audio::Capture>,
     pub history_meta: Option<HistoryMeta>,
-    pub coordinator: Coordinator<Option<Destination>>,
+    pub coordinator: Coordinator<Option<Target>>,
     pub active_id: Option<u64>,
-    pub trial_id: Option<u64>,
-    pub trial_focused: bool,
-    pub target: Option<Destination>,
+    pub target: Option<Target>,
     pub cancelled: Arc<AtomicBool>,
     pub settings: Settings,
     pub last_insert: Option<LastInsert>,
@@ -48,8 +56,6 @@ impl Session {
             history_meta: None,
             coordinator: Coordinator::default(),
             active_id: None,
-            trial_id: None,
-            trial_focused: false,
             target: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             settings,
@@ -68,7 +74,6 @@ impl Session {
         self.exiting = true;
         self.cancelled.store(true, Ordering::Relaxed);
         self.active_id = None;
-        self.trial_id = None;
         self.target = None;
         self.history_meta = None;
         self.last_insert = None;

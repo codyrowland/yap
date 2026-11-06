@@ -68,6 +68,10 @@ pub struct Settings {
     pub language: String,
     pub show_overlay: bool,
     pub open_at_login: bool,
+    /// Tidy each transcript with a local language model before inserting.
+    pub cleanup_enabled: bool,
+    /// Which clean-up model (`cleanup::MODELS`).
+    pub cleanup_model: String,
 }
 
 impl Default for Settings {
@@ -90,6 +94,8 @@ impl Default for Settings {
             language: "auto".to_owned(),
             show_overlay: true,
             open_at_login: false,
+            cleanup_enabled: false,
+            cleanup_model: "qwen3.5-2b".to_owned(),
         }
     }
 }
@@ -129,6 +135,10 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if !LANGUAGES.iter().any(|(code, _)| *code == self.language) {
             return Err("Unsupported spoken language".to_owned());
+        }
+
+        if crate::cleanup::model(&self.cleanup_model).is_none() {
+            return Err("Unknown clean-up model".to_owned());
         }
 
         let provider = cloud::provider(&self.cloud_provider).ok_or("Unknown cloud provider")?;
@@ -340,6 +350,8 @@ mod tests {
         assert_eq!(settings.toggle_key, DEFAULT_TOGGLE_KEY);
         assert_eq!(settings.insertion, Insertion::Paste);
         assert!(settings.show_overlay);
+        assert!(!settings.cleanup_enabled);
+        assert_eq!(settings.cleanup_model, "qwen3.5-2b");
     }
 
     #[test]
@@ -349,6 +361,7 @@ mod tests {
         assert!(Settings::from_json(r#"{"language":"xx"}"#).is_err());
         assert!(Settings::from_json(r#"{"engine":"remote"}"#).is_err());
         assert!(Settings::from_json(r#"{"remoteEndpoint":"file:///etc"}"#).is_err());
+        assert!(Settings::from_json(r#"{"cleanupModel":"gpt-9"}"#).is_err());
     }
 
     #[test]

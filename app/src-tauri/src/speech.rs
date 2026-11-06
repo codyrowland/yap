@@ -3,8 +3,16 @@ use std::sync::atomic::AtomicBool;
 
 pub mod cloud;
 pub mod openai_compatible;
+#[cfg(feature = "local-sherpa")]
+pub mod sherpa;
+pub mod stream_input;
 #[cfg(feature = "local-whisper")]
 pub mod whisper;
+
+/// `SpeechConfig::Local` adapters.
+pub const WHISPER_CPP: &str = "whisper.cpp";
+pub const SHERPA_OFFLINE: &str = "sherpa-onnx";
+pub const SHERPA_STREAMING: &str = "sherpa-onnx-streaming";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SpeechConfig {
@@ -27,17 +35,21 @@ pub enum SpeechConfig {
 }
 
 impl SpeechConfig {
+    /// True for on-device engines that decode while recording.
+    pub fn streams(&self) -> bool {
+        matches!(self, SpeechConfig::Local { adapter, .. } if adapter == SHERPA_STREAMING)
+    }
+
     /// Engine and model names shown in history and the overlay.
     pub fn describe(&self) -> (String, String) {
         match self {
-            SpeechConfig::Local { model_id, .. } => (
+            SpeechConfig::Local {
+                model_id, artifact, ..
+            } => (
                 "On-device".to_owned(),
-                format!(
-                    "Whisper {}",
-                    model_id
-                        .trim_start_matches("ggml-")
-                        .trim_end_matches(".bin")
-                ),
+                crate::models::for_path(artifact)
+                    .map(crate::models::display_name)
+                    .unwrap_or_else(|| model_id.clone()),
             ),
             SpeechConfig::OpenAiCompatible { model_id, .. } => {
                 ("Self-hosted".to_owned(), model_id.clone())
@@ -66,6 +78,19 @@ pub trait SpeechProvider: Send {
         samples_16k_mono: &[f32],
         cancelled: &AtomicBool,
     ) -> Result<Transcript, String>;
+
+    /// Streaming engines return a session to feed while recording.
+    fn start_live(&mut self) -> Option<Box<dyn LiveSession>> {
+        None
+    }
+}
+
+/// A recording being transcribed while it happens.
+pub trait LiveSession: Send {
+    /// Adds audio (mono, any sample rate) and returns the text so far.
+    fn feed(&mut self, sample_rate: u32, samples: &[f32]) -> String;
+    /// Ends the audio and returns the final text.
+    fn finish(self: Box<Self>) -> String;
 }
 
 /// `language` is an ISO-639-1 code, or `None` to let the engine detect it.
@@ -79,13 +104,38 @@ pub fn load_provider(
             adapter,
             model_id,
             artifact,
-        } if adapter == "whisper.cpp" => Ok(Box::new(whisper::LocalWhisper::load(
+        } if adapter == WHISPER_CPP => Ok(Box::new(whisper::LocalWhisper::load(
+            model_id.clone(),
+            artifact,
+            language,
+        )?)),
+        #[cfg(feature = "local-sherpa")]
+        SpeechConfig::Local {
+            adapter,
+            model_id,
+            artifact,
+        } if adapter == SHERPA_OFFLINE => {
+            let family = crate::models::for_path(artifact)
+                .map(|model| model.family)
+                .ok_or("Unknown on-device model")?;
+            Ok(Box::new(sherpa::OfflineSherpa::load(
+                family,
+                model_id.clone(),
+                artifact,
+            )?))
+        }
+        #[cfg(feature = "local-sherpa")]
+        SpeechConfig::Local {
+            adapter,
+            model_id,
+            artifact,
+        } if adapter == SHERPA_STREAMING => Ok(Box::new(sherpa::StreamingSherpa::load(
             model_id.clone(),
             artifact,
             language,
         )?)),
         SpeechConfig::Local { .. } => {
-            Err("Selected local speech adapter is unavailable".to_owned())
+            Err("Selected on-device engine is not included in this build".to_owned())
         }
         SpeechConfig::OpenAiCompatible {
             model_id,

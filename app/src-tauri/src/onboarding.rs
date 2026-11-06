@@ -1,12 +1,11 @@
-//! First-run setup (design 2a): permission checks, engine setup, talk keys
-//! and a practice recording inside Yap.
+//! First-run setup (design 2a): permission checks, engine setup and talk
+//! keys. The "Try it" step uses normal dictation into its own text box.
 
 use tauri::{AppHandle, State};
-use yap_app::coordinator::Decision;
 use yap_app::settings::Engine;
 
 use crate::config;
-use crate::dictation::{begin_recording, speech_config, stop_recording};
+use crate::dictation::speech_config;
 use crate::state::{SessionState, lock};
 use crate::{audio, platform_input};
 
@@ -46,7 +45,16 @@ pub fn onboarding_permissions(index: usize) -> PermissionStatus {
 
 #[tauri::command]
 pub fn complete_onboarding(session: State<'_, SessionState>, app: AppHandle) -> Result<(), String> {
-    let mut session = lock(&session)?;
+    let result = finish_onboarding(&session, &app);
+    match &result {
+        Ok(()) => crate::logfile::write("onboarding completed"),
+        Err(error) => crate::logfile::write(&format!("onboarding could not finish: {error}")),
+    }
+    result
+}
+
+fn finish_onboarding(session: &SessionState, app: &AppHandle) -> Result<(), String> {
+    let session = lock(session)?;
     if !session.idle() {
         return Err("Finish the recording before completing setup".to_owned());
     }
@@ -56,66 +64,17 @@ pub fn complete_onboarding(session: State<'_, SessionState>, app: AppHandle) -> 
             .settings
             .local_model_path
             .as_ref()
-            .is_some_and(|path| std::path::Path::new(path).is_file())
+            .is_some_and(|path| yap_app::models::path_installed(std::path::Path::new(path)))
     {
         return Err("Select a downloaded model before finishing".to_owned());
     }
     session.settings.validate()?;
     speech_config(&session.settings)?;
 
-    session.trial_focused = false;
     drop(session);
-    match std::fs::remove_file(config::onboarding_path(&app)?) {
+    match std::fs::remove_file(config::onboarding_path(app)?) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
-    }
-}
-
-#[tauri::command]
-pub fn trial_focus(
-    enabled: bool,
-    session: State<'_, SessionState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    let mut session = lock(&session)?;
-    session.trial_focused =
-        enabled && config::onboarding_path(&app)?.is_file() && platform_input::app_is_foreground();
-    Ok(())
-}
-
-#[tauri::command]
-pub fn trial_start(session: State<'_, SessionState>, app: AppHandle) -> Result<u64, String> {
-    if !config::onboarding_path(&app)?.is_file() {
-        return Err("Onboarding is not active".to_owned());
-    }
-
-    let id = begin_recording(session.inner(), &app, None, None)?;
-    lock(&session)?.trial_id = Some(id);
-    Ok(id)
-}
-
-#[tauri::command]
-pub async fn trial_end(
-    id: u64,
-    session: State<'_, SessionState>,
-    app: AppHandle,
-) -> Result<String, String> {
-    if lock(&session)?.trial_id != Some(id) {
-        return Err("No practice recording is active".to_owned());
-    }
-
-    let result = stop_recording(session.clone(), app.clone(), id).await;
-    crate::overlay::hide(&app);
-    let mut session = lock(&session)?;
-    session.trial_id = None;
-    let text = result?;
-    let result = session.coordinator.begin_insert(id, true);
-    session.active_id = None;
-    session.target = None;
-    session.history_meta = None;
-    match result {
-        Decision::Insert { text, .. } => Ok(text),
-        Decision::None => Err(text),
     }
 }

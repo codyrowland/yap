@@ -84,6 +84,24 @@ impl AudioBuffer {
     }
 }
 
+/// A read-only view of a running capture, for streaming engines that consume
+/// audio while the recording is still going.
+#[derive(Clone)]
+pub struct Tap {
+    buffer: Arc<Mutex<AudioBuffer>>,
+    pub sample_rate: u32,
+}
+
+impl Tap {
+    /// Mono samples captured from index `start` onwards (at `sample_rate`).
+    pub fn read_from(&self, start: usize) -> Vec<f32> {
+        self.buffer
+            .lock()
+            .map(|buffer| buffer.samples.get(start..).unwrap_or_default().to_vec())
+            .unwrap_or_default()
+    }
+}
+
 pub struct Capture {
     stream: Option<Stream>,
     buffer: Arc<Mutex<AudioBuffer>>,
@@ -207,6 +225,13 @@ impl Capture {
         })
     }
 
+    pub fn tap(&self) -> Tap {
+        Tap {
+            buffer: Arc::clone(&self.buffer),
+            sample_rate: self.sample_rate,
+        }
+    }
+
     /// Current input level (RMS, 0–1) and whether the length limit was hit.
     pub fn meter(&self) -> (f32, bool) {
         self.buffer
@@ -279,6 +304,29 @@ mod tests {
         assert!(!meaningful_audio(&[0.5; 1_599]));
         assert!(!meaningful_audio(&[0.0; 1_600]));
         assert!(meaningful_audio(&[0.01; 1_600]));
+    }
+
+    #[test]
+    fn tap_reads_new_samples_without_consuming_them() {
+        let buffer = Arc::new(Mutex::new(AudioBuffer {
+            samples: Vec::new(),
+            channels: 1,
+            max_frames: 100,
+            limited: false,
+            level: 0.0,
+        }));
+        let tap = Tap {
+            buffer: Arc::clone(&buffer),
+            sample_rate: 16_000,
+        };
+        buffer
+            .lock()
+            .unwrap()
+            .append(&[0.1_f32, 0.2, 0.3], |sample| sample);
+        assert_eq!(tap.read_from(0), vec![0.1, 0.2, 0.3]);
+        assert_eq!(tap.read_from(2), vec![0.3]);
+        assert!(tap.read_from(9).is_empty());
+        assert_eq!(buffer.lock().unwrap().samples.len(), 3);
     }
 
     #[test]

@@ -53,7 +53,8 @@ pub fn start(app: AppHandle) {
                     if !controlled_window() {
                         Err("Controlled test window is not foreground".to_owned())
                     } else {
-                        let target = platform_input::focused_destination();
+                        let destination = platform_input::focused_destination();
+                        let target = destination.clone().map(crate::state::Target::App);
                         let state = app.state::<SessionState>();
                         let mut session = state.lock().unwrap();
                         if session.coordinator.phase() != Phase::Idle {
@@ -81,7 +82,7 @@ pub fn start(app: AppHandle) {
                             app.state::<Arc<Mutex<Verifier>>>()
                                 .lock()
                                 .unwrap()
-                                .capture(id, target);
+                                .capture(id, destination);
                             Ok("started".to_owned())
                         }
                     }

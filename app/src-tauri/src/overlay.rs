@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
-use crate::state::SessionState;
+use crate::state::{SessionState, Target};
 use crate::{hotkey, platform_input};
 
 pub const LABEL: &str = "overlay";
@@ -29,6 +29,8 @@ pub enum Overlay {
         engine: String,
         model: String,
     },
+    /// The clean-up model is tidying the transcript.
+    Polishing,
     #[serde(rename_all = "camelCase")]
     Done {
         words: usize,
@@ -76,7 +78,7 @@ pub fn show(app: &AppHandle, state: Overlay) {
         return;
     };
     if matches!(state, Overlay::Hidden) || !enabled(app) {
-        let _ = window.hide();
+        set_visible(&window, false);
         let _ = app.emit_to(LABEL, "overlay-state", Overlay::Hidden);
         return;
     }
@@ -85,7 +87,83 @@ pub fn show(app: &AppHandle, state: Overlay) {
         place(app);
     }
     let _ = app.emit_to(LABEL, "overlay-state", &state);
-    let _ = window.show();
+    set_visible(&window, true);
+}
+
+/// Shows or hides the overlay without ever activating it.
+///
+/// Tauri's `show()` calls `ShowWindow(SW_SHOW)`, which activates the window
+/// even though it is marked not focusable. Windows only lets that happen
+/// while Yap is the foreground app, so dictating into Yap's own window had
+/// the overlay take focus from the text box (and sometimes not give it
+/// back). Other apps were never affected because Windows blocks the
+/// activation there. `SW_SHOWNOACTIVATE` shows it without taking focus.
+///
+/// Both directions go through Win32 so Tauri's idea of the window's
+/// visibility never disagrees with what is on screen.
+#[cfg(windows)]
+fn set_visible(window: &tauri::WebviewWindow, visible: bool) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow};
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    unsafe {
+        ShowWindow(hwnd.0, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+    }
+}
+
+/// The overlay must never keep focus. Even shown with `SW_SHOWNOACTIVATE`
+/// and marked not focusable, its WebView2 page takes focus when the window
+/// appears, which activates the overlay (yap.log: `active=overlay` 150 ms
+/// after a press). Windows only allows that while Yap is in front, so this
+/// only ever took focus from Yap's own window. Hand activation straight
+/// back to the main window; its page then puts the cursor back in the field
+/// the user was in.
+///
+/// Only acts when the overlay really is the active window: clicking Stop
+/// while dictating into another app gives the overlay's page focus without
+/// activating it, and must not pull Yap's window to the front.
+#[cfg(windows)]
+pub fn give_back_focus(app: &AppHandle) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+    let (Some(overlay), Some(main)) = (
+        app.get_webview_window(LABEL),
+        app.get_webview_window(crate::own_window::WINDOW),
+    ) else {
+        return;
+    };
+    let (Ok(overlay_hwnd), Ok(main_hwnd)) = (overlay.hwnd(), main.hwnd()) else {
+        return;
+    };
+    if unsafe { GetForegroundWindow() } != overlay_hwnd.0 || !main.is_visible().unwrap_or(false) {
+        return;
+    }
+    crate::logfile::write("overlay took focus; giving it back to the main window");
+    unsafe {
+        SetForegroundWindow(main_hwnd.0);
+    }
+    let webview: &tauri::Webview = main.as_ref();
+    let _ = webview.set_focus();
+}
+
+#[cfg(not(windows))]
+pub fn give_back_focus(_app: &AppHandle) {}
+
+// macOS and Linux need their own non-activating show (an NSPanel on macOS).
+#[cfg(not(windows))]
+fn set_visible(window: &tauri::WebviewWindow, visible: bool) {
+    let _ = if visible {
+        window.show()
+    } else {
+        window.hide()
+    };
+}
+
+/// Live text from a streaming engine while recording.
+pub fn partial(app: &AppHandle, text: &str) {
+    if enabled(app) {
+        let _ = app.emit_to(LABEL, "overlay-partial", text);
+    }
 }
 
 pub fn hide(app: &AppHandle) {
@@ -173,21 +251,34 @@ pub fn overlay_stop() -> Result<(), String> {
     }
 }
 
-/// Undoes the last insertion with Ctrl+Z if the same field still has focus.
+/// Undoes the last insertion if the same field still has focus: Ctrl+Z in
+/// another app, or the page restoring its field in Yap's own window.
 #[tauri::command]
-pub fn overlay_undo(app: AppHandle, session: tauri::State<'_, SessionState>) -> Result<(), String> {
+pub async fn overlay_undo(
+    app: AppHandle,
+    session: tauri::State<'_, SessionState>,
+) -> Result<(), String> {
     let last = crate::state::lock(&session)?.last_insert.take();
     let Some(last) = last else {
         return Err("Nothing to undo".to_owned());
     };
-    let still_there = last.at.elapsed() <= DONE_VISIBLE + Duration::from_secs(2)
-        && platform_input::destination_verified(
-            Some(&last.destination),
-            platform_input::focused_destination().as_ref(),
-            true,
-            platform_input::modifiers_released(),
-        );
-    if !still_there || !crate::clipboard::undo() {
+    let recent = last.at.elapsed() <= DONE_VISIBLE + Duration::from_secs(2);
+    let handle = app.clone();
+    let undone = recent
+        && tauri::async_runtime::spawn_blocking(move || match last.target {
+            Target::Yap => crate::own_window::undo(&handle, last.id).is_ok(),
+            Target::App(destination) => {
+                platform_input::destination_verified(
+                    Some(&destination),
+                    platform_input::focused_destination().as_ref(),
+                    true,
+                    platform_input::modifiers_released(),
+                ) && crate::clipboard::undo()
+            }
+        })
+        .await
+        .unwrap_or(false);
+    if !undone {
         flash(
             &app,
             Overlay::Error {

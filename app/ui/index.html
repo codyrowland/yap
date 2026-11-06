@@ -89,9 +89,19 @@
               </div>
             </div>
             <div class="setting-row">
-              <div class="what"><strong>Spoken language</strong><span>Auto-detect adds a short delay on the first words.</span></div>
+              <div class="what"><strong>Spoken language</strong><span>Used by Whisper, Nemotron 3.5 and cloud providers; auto-detect adds a short delay on the first words. Parakeet detects the language itself; Moonshine and Nemotron EN are English only.</span></div>
               <div class="control"><select id="language" class="input"></select></div>
             </div>
+          </div>
+
+          <h3 style="margin-top:36px">Clean-up</h3>
+          <p class="panel-intro">A small language model on this computer tidies each dictation before it's inserted: removes “um”s and false starts, fixes grammar and punctuation, and turns spoken lists into bullet points. Nothing leaves your PC.</p>
+          <div class="rows">
+            <div class="setting-row">
+              <div class="what"><strong>Clean up dictations</strong><span id="cleanup-status">Adds a short pause after you stop talking.</span></div>
+              <button type="button" class="switch" role="switch" id="cleanup-enabled" aria-label="Clean up dictations"><span></span></button>
+            </div>
+            <div class="variants" id="cleanup-models" style="margin:0;border-top:0"></div>
           </div>
         </section>
 
@@ -153,6 +163,7 @@
     </div>
     <div id="status" class="status-line" role="status"></div>
   </div>
+  <script src="dictate.js"></script>
   <script>
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
@@ -164,7 +175,7 @@
     let catalog = null;
     let tab = 'talk';
     let download = null;              // { id, pct }
-    let openFamilies = new Set(['whisper']);
+    let openFamilies = new Set(['parakeet', 'whisper']);
 
     // ---------- saving ----------
     let chain = Promise.resolve();
@@ -184,7 +195,12 @@
     // ---------- engine summary ----------
     const provider = () => catalog.providers.find(p => p.id === settings.cloudProvider) || catalog.providers[0];
     const cloudModel = () => settings.cloudModels[settings.cloudProvider] || provider().models[0] || '';
-    const modelName = path => path ? 'Whisper ' + path.split(/[\\/]/).pop().replace(/^ggml-/, '').replace(/\.bin$/, '') : null;
+    const modelName = path => {
+      if (!path) return null;
+      const model = catalog.models.find(m => m.path === path);
+      if (model) return `${FAMILIES.find(f => f.id === model.family)?.name || ''} ${model.label}`.trim();
+      return path.split(/[\\/]/).pop();
+    };
     function activeEngine() {
       if (settings.engine === 'local') return [modelName(settings.localModelPath) || 'No model selected', 'On-device'];
       if (settings.engine === 'cloud') return [cloudModel() || 'Custom model', provider().label];
@@ -322,7 +338,81 @@
     window.addEventListener('pagehide', () => invoke('cancel_key_capture').catch(() => {}));
 
     // ---------- 2f general ----------
+    // ---------- clean-up ----------
+    let cleanup = null;   // { models, status }
+    async function refreshCleanup() { cleanup = await invoke('cleanup_catalog'); }
+    const CLEANUP_STATUS = { off: '', starting: 'Loading the model…', ready: 'Ready.' };
+    function renderCleanup() {
+      if (!cleanup) return;
+      $('cleanup-enabled').setAttribute('aria-checked', String(settings.cleanupEnabled));
+      const status = cleanup.status;
+      $('cleanup-status').textContent = status.state === 'error' ? status.message
+        : settings.cleanupEnabled ? (CLEANUP_STATUS[status.state] || '') + ' Adds a short pause after you stop talking.'
+        : 'Adds a short pause after you stop talking. Download a model, then turn this on.';
+      const list = $('cleanup-models');
+      list.replaceChildren();
+      for (const model of cleanup.models) {
+        const eventId = `cleanup:${model.id}`;
+        const active = model.id === settings.cleanupModel;
+        const row = el('div', 'variant');
+        const pick = el('button', 'pick');
+        pick.type = 'button';
+        pick.setAttribute('role', 'radio');
+        pick.setAttribute('aria-checked', String(active));
+        pick.setAttribute('aria-label', `Use ${model.label}`);
+        pick.disabled = !model.installed;
+        pick.onclick = () => save({ cleanupModel: model.id });
+        const title = el('span', 'title');
+        title.append(el('strong', null, model.label), el('span', null, model.note));
+        const actions = el('div', 'actions');
+        if (download && download.id === eventId) {
+          const progress = el('div', 'progress');
+          const bar = el('div'); const fill = el('span'); fill.style.width = download.pct + '%'; bar.append(fill);
+          progress.append(bar, el('span', null, download.pct + '%'));
+          const cancel = el('button', 'btn btn-ghost btn-small', 'Cancel');
+          cancel.onclick = () => invoke('cancel_model_download', { id: eventId }).catch(say);
+          actions.append(progress, cancel);
+        } else if (model.installed) {
+          actions.append(el('span', 'muted', active && settings.cleanupEnabled ? 'In use' : 'Downloaded'));
+          const remove = el('button', 'btn btn-icon btn-secondary');
+          remove.type = 'button';
+          remove.setAttribute('aria-label', `Delete ${model.label}`);
+          remove.innerHTML = icon('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>');
+          remove.onclick = async () => {
+            try { await invoke('delete_cleanup', { id: model.id }); await refreshCleanup(); renderCleanup(); }
+            catch (error) { say(error); }
+          };
+          actions.append(remove);
+        } else {
+          const get = el('button', 'btn btn-secondary btn-small');
+          get.type = 'button';
+          get.innerHTML = icon('<path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5"/>') + 'Download';
+          get.disabled = !!download;
+          get.onclick = async () => {
+            download = { id: eventId, pct: 0 };
+            renderCleanup();
+            try { await invoke('download_cleanup', { id: model.id }); }
+            catch (error) { download = null; say(error); renderCleanup(); }
+          };
+          actions.append(get);
+        }
+        row.append(pick, title, el('span', 'size', formatBytes(model.downloadBytes || model.bytes)), actions);
+        list.append(row);
+      }
+    }
+    $('cleanup-enabled').onclick = async () => {
+      const next = !settings.cleanupEnabled;
+      if (next && !cleanup.models.some(m => m.id === settings.cleanupModel && m.installed)) {
+        const installed = cleanup.models.find(m => m.installed);
+        if (!installed) { say('Download a clean-up model first.'); return; }
+        await save({ cleanupEnabled: true, cleanupModel: installed.id });
+      } else {
+        await save({ cleanupEnabled: next });
+      }
+    };
+
     function renderGeneral() {
+      renderCleanup();
       $('microphone').value = String(settings.microphoneIndex);
       $('open-at-login').setAttribute('aria-checked', String(settings.openAtLogin));
       $('show-overlay').setAttribute('aria-checked', String(settings.showOverlay));
@@ -336,17 +426,13 @@
     $('language').onchange = event => save({ language: event.target.value });
 
     // ---------- 2c on-device ----------
-    const WHISPER_NOTES = {
-      tiny: 'Fastest · lowest accuracy', base: 'Fast · short notes', small: 'Balanced',
-      medium: 'Accurate · slower', 'large-v3': 'Most accurate · slowest', 'large-v3-turbo': 'Near large-v3 accuracy · much faster'
-    };
-    // Families from the design that Yap cannot run yet. Listed so the screen
-    // matches the design; they unlock as runtimes are added.
-    const UPCOMING = [
-      ['Parakeet', 'NVIDIA', 'English · 25 European languages (v3)'], ['Canary', 'NVIDIA', 'English, German, Spanish, French'],
-      ['Moonshine', 'Useful Sensors', 'English'], ['Qwen3-ASR', 'Alibaba', 'Multilingual'], ['Voxtral', 'Mistral', 'Multilingual'],
-      ['Kyutai STT', 'Kyutai', 'English, French'], ['Vosk', 'Alpha Cephei', '20+ languages · per-language models'],
-      ['SenseVoice', 'Alibaba', 'Chinese, Cantonese, English, Japanese, Korean'], ['Granite Speech', 'IBM', 'English, French, German, Spanish, Portuguese']
+    // Families with a runtime in Yap, in display order, and the ones planned
+    // next (shown as "Coming soon" until their runtime lands).
+    const FAMILIES = [
+      { id: 'parakeet', name: 'Parakeet', vendor: 'NVIDIA', langs: 'English · 25 European languages (v3) · fastest on CPU' },
+      { id: 'whisper', name: 'Whisper', vendor: 'OpenAI', langs: '99 languages · uses the spoken-language setting' },
+      { id: 'nemotron', name: 'Nemotron Streaming', vendor: 'NVIDIA', langs: 'Text appears in the overlay while you speak' },
+      { id: 'moonshine', name: 'Moonshine', vendor: 'Useful Sensors', langs: 'English · tiny, for low-power laptops' }
     ];
     const formatBytes = bytes => bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : Math.round(bytes / 1e6) + ' MB';
     const icon = path => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
@@ -370,69 +456,75 @@
       return family;
     }
 
+    function variantRow(model) {
+      const active = model.path && model.path === settings.localModelPath;
+      const family = FAMILIES.find(f => f.id === model.family);
+      const row = el('div', 'variant');
+      const pick = el('button', 'pick');
+      pick.type = 'button';
+      pick.setAttribute('role', 'radio');
+      pick.setAttribute('aria-checked', String(!!active));
+      pick.setAttribute('aria-label', `Use ${family.name} ${model.label}`);
+      pick.disabled = !model.path || !model.available;
+      pick.onclick = () => save({ localModelPath: model.path, engine: 'local' });
+      const title = el('span', 'title');
+      title.append(el('strong', null, model.label), el('span', null, model.available ? model.note : 'Not included in this build'));
+      const actions = el('div', 'actions');
+      if (download && download.id === model.id) {
+        const progress = el('div', 'progress');
+        const bar = el('div'); const fill = el('span'); fill.style.width = download.pct + '%'; bar.append(fill);
+        progress.append(bar, el('span', null, download.pct >= 100 && model.family !== 'whisper' ? 'Unpacking…' : download.pct + '%'));
+        const cancel = el('button', 'btn btn-ghost btn-small', 'Cancel');
+        cancel.onclick = () => invoke('cancel_model_download', { id: model.id }).catch(say);
+        actions.append(progress, cancel);
+      } else if (model.path) {
+        actions.append(el('span', 'muted', active ? 'In use' : 'Downloaded'));
+        const remove = el('button', 'btn btn-icon btn-secondary');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', `Delete ${family.name} ${model.label}`);
+        remove.innerHTML = icon('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>');
+        remove.onclick = async () => {
+          try { await invoke('delete_model', { id: model.id }); await refreshCatalog(); settings = await invoke('current_settings'); render(); }
+          catch (error) { say(error); }
+        };
+        actions.append(remove);
+      } else {
+        const get = el('button', 'btn btn-secondary btn-small');
+        get.type = 'button';
+        get.innerHTML = icon('<path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5"/>') + 'Download';
+        get.disabled = !!download || !model.available;
+        get.onclick = async () => {
+          download = { id: model.id, pct: 0 };
+          renderFamilies();
+          try { await invoke('download_model', { id: model.id }); }
+          catch (error) { download = null; say(error); renderFamilies(); }
+        };
+        actions.append(get);
+      }
+      row.append(pick, title, el('span', 'size', formatBytes(model.bytes)), actions);
+      return row;
+    }
+
     function renderFamilies() {
       const container = $('families');
       container.replaceChildren();
-      const models = [...catalog.whisper].sort((a, b) => Object.keys(WHISPER_NOTES).indexOf(a.id) - Object.keys(WHISPER_NOTES).indexOf(b.id));
-      const ready = models.filter(m => m.path).length;
-      const inUse = models.some(m => m.path && m.path === settings.localModelPath);
-      const open = openFamilies.has('whisper');
-      const whisper = familyRow('Whisper', 'OpenAI', '99 languages', download ? 'Downloading…' : ready ? `${ready} of ${models.length} downloaded` : `${models.length} sizes`, inUse, open,
-        () => { open ? openFamilies.delete('whisper') : openFamilies.add('whisper'); renderFamilies(); });
-      if (open) {
-        const list = el('div', 'variants');
-        for (const model of models) {
-          const active = model.path && model.path === settings.localModelPath;
-          const row = el('div', 'variant');
-          const pick = el('button', 'pick');
-          pick.type = 'button';
-          pick.setAttribute('role', 'radio');
-          pick.setAttribute('aria-checked', String(!!active));
-          pick.setAttribute('aria-label', `Use Whisper ${model.id}`);
-          pick.disabled = !model.path;
-          pick.onclick = () => save({ localModelPath: model.path, engine: 'local' });
-          const title = el('span', 'title');
-          title.append(el('strong', null, model.id), el('span', null, WHISPER_NOTES[model.id] || ''));
-          const actions = el('div', 'actions');
-          if (download && download.id === model.id) {
-            const progress = el('div', 'progress');
-            const bar = el('div'); const fill = el('span'); fill.style.width = download.pct + '%'; bar.append(fill);
-            progress.append(bar, el('span', null, download.pct + '%'));
-            const cancel = el('button', 'btn btn-ghost btn-small', 'Cancel');
-            cancel.onclick = () => invoke('cancel_model_download', { id: model.id }).catch(say);
-            actions.append(progress, cancel);
-          } else if (model.path) {
-            actions.append(el('span', 'muted', active ? 'In use' : 'Downloaded'));
-            const remove = el('button', 'btn btn-icon btn-secondary');
-            remove.type = 'button';
-            remove.setAttribute('aria-label', `Delete Whisper ${model.id}`);
-            remove.innerHTML = icon('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>');
-            remove.onclick = async () => {
-              try { await invoke('delete_model', { id: model.id }); await refreshCatalog(); settings = await invoke('current_settings'); render(); }
-              catch (error) { say(error); }
-            };
-            actions.append(remove);
-          } else {
-            const get = el('button', 'btn btn-secondary btn-small');
-            get.type = 'button';
-            get.innerHTML = icon('<path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5"/>') + 'Download';
-            get.disabled = !!download;
-            get.onclick = async () => {
-              download = { id: model.id, pct: 0 };
-              renderFamilies();
-              try { await invoke('download_model', { id: model.id }); }
-              catch (error) { download = null; say(error); renderFamilies(); }
-            };
-            actions.append(get);
-          }
-          row.append(pick, title, el('span', 'size', formatBytes(model.bytes)), actions);
-          list.append(row);
+      for (const family of FAMILIES) {
+        const models = catalog.models.filter(m => m.family === family.id);
+        const ready = models.filter(m => m.path).length;
+        const inUse = models.some(m => m.path && m.path === settings.localModelPath);
+        const loading = download && models.some(m => m.id === download.id);
+        const open = openFamilies.has(family.id);
+        const summary = loading ? 'Downloading…' : ready ? `${ready} of ${models.length} downloaded` : models.length > 1 ? `${models.length} sizes` : formatBytes(models[0].bytes);
+        const row = familyRow(family.name, family.vendor, family.langs, summary, inUse, open,
+          () => { open ? openFamilies.delete(family.id) : openFamilies.add(family.id); renderFamilies(); });
+        if (open) {
+          const list = el('div', 'variants');
+          models.forEach(model => list.append(variantRow(model)));
+          row.append(list);
         }
-        whisper.append(list);
+        container.append(row);
       }
-      container.append(whisper);
-      for (const [name, vendor, langs] of UPCOMING) container.append(familyRow(name, vendor, langs, 'Coming soon', false, false, null));
-      const used = models.filter(m => m.path).reduce((sum, m) => sum + m.bytes, 0);
+      const used = catalog.models.filter(m => m.path).reduce((sum, m) => sum + m.bytes, 0);
       $('storage').textContent = `${formatBytes(used)} used by downloaded models`;
     }
     async function refreshCatalog() { catalog = await invoke('catalog'); }
@@ -583,12 +675,18 @@
 
     // ---------- events ----------
     listen('model-download-progress', async ({ payload }) => {
-      if (payload.state === 'downloading') { download = { id: payload.id, pct: Math.floor(payload.downloaded * 100 / payload.total) }; renderFamilies(); return; }
+      const forCleanup = payload.id.startsWith('cleanup:');
+      if (payload.state === 'downloading') {
+        download = { id: payload.id, pct: Math.floor(payload.downloaded * 100 / payload.total) };
+        forCleanup ? renderCleanup() : renderFamilies();
+        return;
+      }
       download = null;
-      if (payload.error) say(payload.error); else if (payload.state === 'ready') say(`Whisper ${payload.id} is ready`);
-      await refreshCatalog().catch(say);
+      if (payload.error) say(payload.error); else if (payload.state === 'ready') say('Download finished');
+      await (forCleanup ? refreshCleanup() : refreshCatalog()).catch(say);
       render();
     });
+    listen('cleanup-status', ({ payload }) => { if (cleanup) { cleanup.status = payload; renderCleanup(); } });
     listen('settings-changed', async () => { try { settings = await invoke('current_settings'); render(); } catch (_) {} });
     listen('dictation-preview', ({ payload }) => say(payload));
 
@@ -598,6 +696,7 @@
       const [devices, saved, list] = await Promise.all([invoke('microphones'), invoke('current_settings'), invoke('catalog')]);
       settings = saved;
       catalog = list;
+      await refreshCleanup().catch(say);
       devices.forEach((name, index) => $('microphone').add(new Option(name, index)));
       if (!devices.length) say('No microphones found');
       for (const [code, label] of catalog.languages) $('language').add(new Option(label, code));

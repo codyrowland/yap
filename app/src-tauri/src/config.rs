@@ -100,6 +100,15 @@ pub fn apply(
 
     next.version = yap_app::settings::CURRENT_VERSION;
     next.validate()?;
+    if next.cleanup_enabled {
+        let model = yap_app::cleanup::model(&next.cleanup_model).ok_or("Unknown clean-up model")?;
+        if !yap_app::cleanup::installed(model, &models_path(app)?) {
+            return Err(format!(
+                "Download {} before turning on clean-up",
+                model.label
+            ));
+        }
+    }
     // With no microphone plugged in, other settings can still change; the
     // saved microphone name is kept so it is found again when reconnected.
     let names = audio::microphones().unwrap_or_default();
@@ -129,8 +138,14 @@ pub fn apply(
         return Err(error);
     }
 
+    crate::logfile::write(&format!(
+        "settings saved: engine={:?} hold={} toggle={} clean-up={}",
+        next.engine, next.hold_key, next.toggle_key, next.cleanup_enabled
+    ));
     session.settings = next.clone();
     drop(session);
+    crate::dictation::preload(&next);
+    crate::assistant::sync(app, &next);
     let _ = app.emit("settings-changed", ());
     Ok(next)
 }

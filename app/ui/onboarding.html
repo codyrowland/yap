@@ -35,7 +35,7 @@
             <small>Step 2 of 5</small>
             <h2>Where should speech be transcribed?</h2>
             <p>You can change this any time in Settings.</p>
-            <label class="row radio"><span>On this computer<br><small>Private and offline after downloading a Whisper model.</small></span><input name="engine" type="radio" value="local" checked><span class="dot"></span></label>
+            <label class="row radio"><span>On this computer<br><small>Private and offline after downloading a Parakeet or Whisper model.</small></span><input name="engine" type="radio" value="local" checked><span class="dot"></span></label>
             <label class="row radio"><span>Cloud API<br><small>OpenAI, Groq, Fireworks AI or another OpenAI-compatible service, with your own API key.</small></span><input name="engine" type="radio" value="cloud"><span class="dot"></span></label>
             <label class="row radio"><span>Self-hosted server<br><small>A transcription server you run on another machine.</small></span><input name="engine" type="radio" value="remote"><span class="dot"></span></label>
           </section>
@@ -43,7 +43,7 @@
             <small>Step 3 of 5</small>
             <div id="local-setup">
               <h2>Download a model</h2>
-              <p>Select a model to run locally. More sizes are available in Settings → On-device.</p>
+              <p>Pick a model to run on this computer. Parakeet is the fastest on most PCs; Whisper covers more languages. More sizes are in Settings → On-device.</p>
               <div id="starter-models"></div>
             </div>
             <div id="cloud-setup" hidden>
@@ -89,9 +89,8 @@
           <section id="step-4" hidden>
             <small>Step 5 of 5</small>
             <h2>Try it</h2>
-            <p>Click the box, hold your talk key (<strong id="hold-label"></strong>), speak, then release. Yap will transcribe into this box. You can also hold the button below.</p>
+            <p>With the cursor in the box below, hold <strong id="hold-label"></strong>, say a sentence, then let go. Yap types your words into the box — exactly the way it will in any other app. For longer passages, press <strong id="toggle-label"></strong> once to start and again to stop.</p>
             <textarea id="practice" class="input" placeholder="Your words appear here" aria-label="Dictation practice"></textarea>
-            <button id="try-record" class="btn btn-secondary" type="button">Hold here to record</button>
           </section>
           <div id="message" role="status"></div>
         </div>
@@ -99,6 +98,7 @@
       </main>
     </div>
   </div>
+  <script src="dictate.js"></script>
   <script>
     const invoke = window.__TAURI__.core.invoke;
     const status = document.getElementById('message');
@@ -113,10 +113,9 @@
     let reached = 0;
     let permissions = null;
     let models = [];
-    let selectedModel = 'large-v3-turbo';
+    let selectedModel = 'parakeet-tdt-0.6b-v3';
     let activeDownload = null;
     let saved = null;
-    let trialStart = null;
     let capturingKind = null;
     let captureTimer = null;
     let capturedModifiers = new Map();
@@ -163,6 +162,9 @@
 
     function showStep(index) {
       if (step === 3 && index !== step) cancelCapture().catch(error => status.textContent = String(error));
+      // Make sure the talk keys are live (not left in key-capture mode) on
+      // every step but "Talk keys".
+      if (index !== 3) invoke('cancel_key_capture').catch(() => {});
       step = index;
       for (let i = 0; i < 5; i++) {
         document.getElementById(`step-${i}`).hidden = i !== step;
@@ -177,6 +179,8 @@
       document.getElementById('cloud-setup').hidden = engine() !== 'cloud';
       document.getElementById('remote-setup').hidden = engine() !== 'remote';
       status.textContent = '';
+      // Put the cursor in the practice box so the first try just works.
+      if (step === 4) setTimeout(() => document.getElementById('practice').focus(), 0);
     }
 
     async function checkPermissions() {
@@ -193,9 +197,9 @@
     function renderModels() {
       const container = document.getElementById('starter-models');
       container.replaceChildren();
-      for (const id of ['large-v3-turbo', 'base', 'tiny']) {
+      for (const id of ['parakeet-tdt-0.6b-v3', 'large-v3-turbo', 'base']) {
         const item = models.find(model => model.id === id);
-        if (!item) continue;
+        if (!item || !item.available) continue;
         const row = document.createElement('div');
         row.className = 'row';
         const choice = document.createElement('input');
@@ -204,7 +208,8 @@
         choice.checked = selectedModel === id;
         choice.onchange = () => { selectedModel = id; renderModels(); };
         const label = document.createElement('span');
-        label.textContent = `Whisper ${id} · ${(item.bytes / 1e6).toFixed(0)} MB`;
+        const name = `${{ parakeet: 'Parakeet', whisper: 'Whisper', moonshine: 'Moonshine', nemotron: 'Nemotron' }[item.family]} ${item.label}`;
+        label.textContent = `${name} · ${(item.bytes / 1e6).toFixed(0)} MB${id === 'parakeet-tdt-0.6b-v3' ? ' · recommended, fastest' : ''}`;
         const action = document.createElement('button');
         action.type = 'button';
         action.className = 'btn btn-secondary';
@@ -285,7 +290,7 @@
 
     Promise.all([invoke('microphones'), invoke('current_settings'), invoke('catalog')]).then(([devices, settings, catalog]) => {
       saved = settings;
-      models = catalog.whisper;
+      models = catalog.models;
       providers = catalog.providers.filter(p => p.supported);
       const providerSelect = document.getElementById('cloud-provider');
       for (const p of providers) providerSelect.add(new Option(p.label, p.id));
@@ -307,7 +312,8 @@
       remoteModel.value = settings.remoteModel;
       setKey(holdKey, settings.holdKey);
       setKey(toggleKey, settings.toggleKey);
-      document.getElementById('hold-label').textContent = settings.holdKey;
+      document.getElementById('hold-label').textContent = settings.holdKey.replaceAll('+', ' ');
+      document.getElementById('toggle-label').textContent = settings.toggleKey.replaceAll('+', ' ');
       renderModels();
       showStep(0);
       checkPermissions();
@@ -410,7 +416,10 @@
       try {
         if (step === 0 && (!permissions?.microphone || !permissions?.accessibility)) throw new Error('Check both permissions before continuing.');
         if (step === 2 || step === 3) await saveSettings();
-        if (step === 3) document.getElementById('hold-label').textContent = holdKey.value;
+        if (step === 3) {
+          document.getElementById('hold-label').textContent = holdKey.value.replaceAll('+', ' ');
+          document.getElementById('toggle-label').textContent = toggleKey.value.replaceAll('+', ' ');
+        }
         if (step === 3 && holdKey.value === toggleKey.value) throw new Error('Talk keys must be different.');
         if (step === 4) {
           await saveSettings();
@@ -428,50 +437,26 @@
     };
     window.__TAURI__.event.listen('model-download-progress', async ({ payload }) => {
       if (payload.state === 'downloading') {
-        status.textContent = `Downloading ${payload.id}: ${Math.floor(payload.downloaded * 100 / payload.total)}%`;
+        const pct = Math.floor(payload.downloaded * 100 / payload.total);
+        status.textContent = pct >= 100 ? `Unpacking ${payload.id}…` : `Downloading ${payload.id}: ${pct}%`;
       } else {
         activeDownload = null;
         status.textContent = payload.error || `${payload.id}: ${payload.state}`;
         try {
-          models = (await invoke('catalog')).whisper;
+          models = (await invoke('catalog')).models;
           renderModels();
         } catch (error) {
           status.textContent = String(error);
         }
       }
     });
+    // "Try it" is normal dictation: the box is an ordinary text field, so
+    // Yap inserts into it exactly as it would into any other app.
     const practiceBox = document.getElementById('practice');
-    practiceBox.onfocus = () => invoke('trial_focus', { enabled: true }).catch(error => status.textContent = String(error));
-    practiceBox.onblur = () => invoke('trial_focus', { enabled: false }).catch(error => status.textContent = String(error));
-    window.__TAURI__.event.listen('onboarding-listening', () => status.textContent = 'Listening…');
-    window.__TAURI__.event.listen('onboarding-transcript', ({ payload }) => {
-      practiceBox.value += (practiceBox.value && !practiceBox.value.endsWith(' ') ? ' ' : '') + payload;
-      status.textContent = 'Transcribed from your microphone.';
+    practiceBox.addEventListener('input', () => {
+      if (practiceBox.value.trim()) status.textContent = 'It worked. Press Finish when you are ready.';
     });
     window.__TAURI__.event.listen('dictation-preview', ({ payload }) => { status.textContent = payload; });
-    const record = document.getElementById('try-record');
-    record.onpointerdown = event => {
-      event.preventDefault();
-      record.setPointerCapture(event.pointerId);
-      status.textContent = 'Starting microphone…';
-      trialStart = invoke('trial_start');
-      trialStart.then(() => status.textContent = 'Listening…').catch(error => status.textContent = String(error));
-    };
-    record.onpointerup = async () => {
-      if (!trialStart) return;
-      const started = trialStart;
-      trialStart = null;
-      try {
-        const id = await started;
-        status.textContent = 'Transcribing…';
-        const text = await invoke('trial_end', { id });
-        practiceBox.value += (practiceBox.value && !practiceBox.value.endsWith(' ') ? ' ' : '') + text;
-        status.textContent = 'Transcribed from your microphone.';
-      } catch (error) {
-        status.textContent = String(error);
-      }
-    };
-    record.onpointercancel = record.onpointerup;
   </script>
 </body>
 </html>

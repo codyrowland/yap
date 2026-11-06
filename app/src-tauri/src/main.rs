@@ -7,9 +7,11 @@
 //! - `overlay`     recording overlay window (design 2h)
 //! - `tray`        tray icon and popover (design 2i)
 //! - `onboarding`  first-run setup (design 2a)
+//! - `own_window`  dictation into Yap's own window
 //! - `commands`    Settings / History / tray window commands
 //! - `hotkey`, `platform_input`, `clipboard`, `audio`, `autostart`: Windows I/O
 
+mod assistant;
 mod audio;
 mod autostart;
 mod clipboard;
@@ -19,8 +21,10 @@ mod dictation;
 mod hotkey;
 #[cfg(all(debug_assertions, feature = "input-test"))]
 mod input_test;
+mod logfile;
 mod onboarding;
 mod overlay;
+mod own_window;
 mod platform_input;
 mod state;
 mod tray;
@@ -44,6 +48,7 @@ pub fn shutdown(app: &AppHandle) {
     }
     hotkey::finish();
     overlay::hide(app);
+    assistant::stop();
     app.exit(0);
 }
 
@@ -73,6 +78,12 @@ fn start_history_expiry(handle: AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        // tao registers raw keyboard/mouse input on our windows by default.
+        // With that registration Windows stops calling our own low-level
+        // keyboard hook while a Yap window is focused, so the talk key went
+        // deaf inside Yap (wry #1761, tauri #13919). We don't use device
+        // events, so turn the registration off.
+        .device_event_filter(tauri::DeviceEventFilter::Always)
         .manage(Arc::new(Mutex::new(Session::new(Settings::default()))))
         .manage(Arc::new(Mutex::new(Verifier::start())))
         .manage(Arc::new(Mutex::new(None::<(String, Arc<AtomicBool>)>)))
@@ -90,6 +101,9 @@ fn main() {
             commands::download_model,
             commands::cancel_model_download,
             commands::delete_model,
+            commands::cleanup_catalog,
+            commands::download_cleanup,
+            commands::delete_cleanup,
             commands::open_models_folder,
             commands::history_entries,
             commands::delete_history,
@@ -100,13 +114,12 @@ fn main() {
             onboarding::onboarding_needed,
             onboarding::onboarding_permissions,
             onboarding::complete_onboarding,
-            onboarding::trial_start,
-            onboarding::trial_end,
-            onboarding::trial_focus,
             overlay::overlay_stop,
             overlay::overlay_undo,
+            own_window::own_window_reply,
         ])
         .setup(|app| {
+            logfile::init(app.path().app_data_dir()?.join("yap.log"));
             tray::install(app)?;
             let history_path = app.path().app_data_dir()?.join("history.json");
             app.manage(Mutex::new(
@@ -122,6 +135,14 @@ fn main() {
                 settings.insertion = yap_app::settings::Insertion::Type;
             }
             let (hold_key, toggle_key) = (settings.hold_key.clone(), settings.toggle_key.clone());
+            #[cfg(all(debug_assertions, feature = "input-test"))]
+            let preload = !input_test::active();
+            #[cfg(not(all(debug_assertions, feature = "input-test")))]
+            let preload = true;
+            if preload {
+                dictation::preload(&settings);
+                assistant::sync(app.handle(), &settings);
+            }
             app.state::<SessionState>()
                 .lock()
                 .map_err(|error| std::io::Error::other(error.to_string()))?
@@ -135,6 +156,9 @@ fn main() {
             let (hook, events) =
                 hotkey::start(&hold_key, &toggle_key).map_err(std::io::Error::other)?;
             app.manage(Mutex::new(Some(hook)));
+            logfile::write(&format!(
+                "talk keys installed: hold={hold_key} toggle={toggle_key}"
+            ));
             #[cfg(all(debug_assertions, feature = "input-test"))]
             if input_test::active() {
                 println!("YAP_TEST hotkey_ready");
@@ -150,17 +174,20 @@ fn main() {
         })
         .on_window_event(|window, event| match window.label() {
             "main" => {
-                if matches!(event, WindowEvent::Focused(false))
-                    && let Ok(mut session) = window.state::<SessionState>().lock()
-                {
-                    session.trial_focused = false;
-                }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let _ = hotkey::cancel_capture();
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
+            overlay::LABEL => match event {
+                WindowEvent::Focused(true) => overlay::give_back_focus(window.app_handle()),
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                _ => {}
+            },
             tray::LABEL => {
                 if matches!(event, WindowEvent::Focused(false)) {
                     let _ = window.hide();

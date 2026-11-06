@@ -264,29 +264,146 @@ fn normalize_key(key: u32, scan: u32, flags: u32) -> u32 {
     }
 }
 
+/// Debug builds trace what the hook does with talk-key-related keys, so a
+/// key that never starts a recording can be explained. Only modifier keys,
+/// Escape and the two talk keys are named; every other key is just counted,
+/// so no typed text ever reaches the log. Traces go through a channel to a
+/// logger thread: the hook itself never touches the disk.
+#[derive(Debug)]
+enum Trace {
+    Key {
+        vk: u32,
+        down: bool,
+        yap_in_front: bool,
+        capturing: bool,
+        active: bool,
+        suppressed: bool,
+        event: Option<Event>,
+    },
+    Other {
+        yap_in_front: bool,
+    },
+    Injected,
+    Busy {
+        yap_in_front: bool,
+    },
+}
+
+static TRACE: OnceLock<mpsc::Sender<Trace>> = OnceLock::new();
+
+fn trace(entry: Trace) {
+    if let Some(sender) = TRACE.get() {
+        let _ = sender.send(entry);
+    }
+}
+
+fn yap_in_front() -> bool {
+    unsafe {
+        let window = GetForegroundWindow();
+        let mut process = 0;
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(window, &mut process);
+        !window.is_null() && process == std::process::id()
+    }
+}
+
+fn start_trace_logger() {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let (sender, receiver) = mpsc::channel::<Trace>();
+    if TRACE.set(sender).is_err() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let (mut other, mut other_front, mut injected, mut busy) = (0_u32, 0_u32, 0_u32, 0_u32);
+        loop {
+            let entry = receiver.recv_timeout(Duration::from_secs(3));
+            if (entry.is_err() || matches!(entry, Ok(Trace::Key { .. })))
+                && other + injected + busy > 0
+            {
+                crate::logfile::write(&format!(
+                    "hook: {other} other keys ({other_front} while Yap in front), {injected} injected skipped, {busy} dropped while busy"
+                ));
+                (other, other_front, injected, busy) = (0, 0, 0, 0);
+            }
+            match entry {
+                Ok(Trace::Key {
+                    vk,
+                    down,
+                    yap_in_front,
+                    capturing,
+                    active,
+                    suppressed,
+                    event,
+                }) => crate::logfile::write(&format!(
+                    "hook: key 0x{vk:02X} {} yap_in_front={yap_in_front} capturing={capturing} active={active} suppressed={suppressed} event={event:?}",
+                    if down { "down" } else { "up" }
+                )),
+                Ok(Trace::Other { yap_in_front }) => {
+                    other += 1;
+                    other_front += u32::from(yap_in_front);
+                }
+                Ok(Trace::Injected) => injected += 1,
+                Ok(Trace::Busy { yap_in_front }) => {
+                    busy += 1;
+                    other_front += u32::from(yap_in_front);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+}
+
 unsafe extern "system" fn hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     if code >= 0 {
         let key = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
+        let tracing = TRACE.get().is_some();
         if key.flags & LLKHF_INJECTED == 0 || accept_injected() {
             let down = message as u32 == WM_KEYDOWN || message as u32 == WM_SYSKEYDOWN;
             let up = message as u32 == WM_KEYUP || message as u32 == WM_SYSKEYUP;
             if let Ok(mut state) = KEY_STATE.get().unwrap().try_lock() {
                 let physical = normalize_key(key.vkCode, key.scanCode, key.flags);
                 let (suppress, event) = state.handle(physical, down, up);
-                if let Some(event) = event {
-                    let event = match event {
-                        Event::Pressed(_) => {
-                            Event::Pressed(unsafe { GetForegroundWindow() } as isize)
+                let event = event.map(|event| match event {
+                    Event::Pressed(_) => Event::Pressed(unsafe { GetForegroundWindow() } as isize),
+                    other => other,
+                });
+                if tracing {
+                    let relevant = physical == ESCAPE
+                        || modifier(physical).is_some()
+                        || state.shortcut.key_matches(physical)
+                        || state.toggle_shortcut.key_matches(physical);
+                    trace(if relevant {
+                        Trace::Key {
+                            vk: physical,
+                            down,
+                            yap_in_front: yap_in_front(),
+                            capturing: state.capturing.is_some(),
+                            active: state.active,
+                            suppressed: suppress,
+                            event: event.clone(),
                         }
-                        other => other,
-                    };
+                    } else {
+                        Trace::Other {
+                            yap_in_front: yap_in_front(),
+                        }
+                    });
+                }
+                if let Some(event) = event {
                     let _ = SENDER.get().unwrap().send(event);
                 }
 
                 if suppress {
                     return 1;
                 }
+            } else if tracing {
+                trace(Trace::Busy {
+                    yap_in_front: yap_in_front(),
+                });
             }
+        } else if tracing {
+            trace(Trace::Injected);
         }
     }
 
@@ -598,6 +715,7 @@ pub fn start(
         }))
         .map_err(|_| "Hotkey already installed")?;
     SENDER.set(sender).map_err(|_| "Hotkey already installed")?;
+    start_trace_logger();
     let running = Arc::new(AtomicBool::new(true));
     let enabled = Arc::clone(&running);
     let (ready, started) = mpsc::channel();
@@ -620,6 +738,7 @@ pub fn start(
         }
 
         UnhookWindowsHookEx(installed);
+        crate::logfile::write("talk-key hook stopped");
     });
     started.recv().map_err(|error| error.to_string())??;
     Ok((

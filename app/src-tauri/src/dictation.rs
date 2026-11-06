@@ -8,17 +8,20 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 use yap_app::coordinator::{Decision, Settings as JobSettings};
 use yap_app::history::History;
+use yap_app::models::Family;
 use yap_app::settings::{Engine, Insertion, Settings};
 use yap_app::speech::{self, SpeechConfig};
 
 use crate::overlay::{self, Overlay};
-use crate::platform_input::{self, Destination, Verifier};
-use crate::state::{HistoryMeta, LastInsert, SessionState, lock};
-use crate::{audio, clipboard, hotkey, onboarding};
+use crate::platform_input::{self, Verifier};
+use crate::state::{HistoryMeta, LastInsert, SessionState, Target, lock};
+use crate::{audio, clipboard, hotkey, own_window};
 
 /// Tells the settings window (and onboarding) what happened.
 pub fn notify(app: &AppHandle, message: impl Into<String>) {
-    let _ = app.emit_to("main", "dictation-preview", message.into());
+    let message = message.into();
+    crate::logfile::write(&format!("notice: {message}"));
+    let _ = app.emit_to("main", "dictation-preview", message);
 }
 
 /// Builds the engine configuration for one job from the saved settings.
@@ -29,12 +32,24 @@ pub fn speech_config(settings: &Settings) -> Result<SpeechConfig, String> {
             if artifact.as_os_str().is_empty() {
                 return Err("Select an on-device model before dictating".to_owned());
             }
-            let model_id = artifact
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "unselected".to_owned());
+            let model = yap_app::models::for_path(&artifact);
+            let model_id = model.map_or_else(
+                || {
+                    artifact
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "unselected".to_owned())
+                },
+                |model| model.id.to_owned(),
+            );
+            let adapter = match model.map(|model| model.family) {
+                Some(Family::Parakeet | Family::Moonshine) => speech::SHERPA_OFFLINE,
+                Some(Family::Nemotron) => speech::SHERPA_STREAMING,
+                // Unknown files are treated as whisper.cpp models, as before.
+                Some(Family::Whisper) | None => speech::WHISPER_CPP,
+            };
             Ok(SpeechConfig::Local {
-                adapter: "whisper.cpp".to_owned(),
+                adapter: adapter.to_owned(),
                 model_id,
                 artifact,
             })
@@ -58,10 +73,83 @@ pub fn speech_config(settings: &Settings) -> Result<SpeechConfig, String> {
     }
 }
 
+/// The loaded on-device model, kept between dictations: loading a model
+/// takes seconds and would otherwise happen on every key release. Cloud and
+/// self-hosted clients are cheap and are built fresh each time.
+type LoadedEngine = (
+    SpeechConfig,
+    Option<String>,
+    Box<dyn speech::SpeechProvider>,
+);
+static LOCAL_ENGINE: Mutex<Option<LoadedEngine>> = Mutex::new(None);
+
+/// Returns the cached engine if it matches, or loads it. Holding the cache
+/// lock while loading makes a dictation wait for a preload in progress
+/// instead of loading the same model twice.
+fn take_engine(
+    speech: &SpeechConfig,
+    language: &Option<String>,
+) -> Result<Box<dyn speech::SpeechProvider>, String> {
+    if !matches!(speech, SpeechConfig::Local { .. }) {
+        return speech::load_provider(speech, language.as_deref());
+    }
+    let mut cache = LOCAL_ENGINE.lock().map_err(|error| error.to_string())?;
+    match cache.take() {
+        Some((cached, cached_language, engine))
+            if &cached == speech && &cached_language == language =>
+        {
+            Ok(engine)
+        }
+        other => {
+            // Free the previous model before loading another one.
+            drop(other);
+            speech::load_provider(speech, language.as_deref())
+        }
+    }
+}
+
+fn keep_engine(
+    speech: &SpeechConfig,
+    language: Option<String>,
+    engine: Box<dyn speech::SpeechProvider>,
+) {
+    if matches!(speech, SpeechConfig::Local { .. })
+        && let Ok(mut cache) = LOCAL_ENGINE.lock()
+    {
+        *cache = Some((speech.clone(), language, engine));
+    }
+}
+
+/// Frees the cached on-device model.
+pub fn unload() {
+    if let Ok(mut cache) = LOCAL_ENGINE.lock() {
+        *cache = None;
+    }
+}
+
+/// Loads the selected on-device model in the background so the first
+/// dictation after starting Yap (or switching models) is fast. Switching to
+/// a cloud or self-hosted engine frees the cached model.
+pub fn preload(settings: &Settings) {
+    let Ok(speech) = speech_config(settings) else {
+        return;
+    };
+    let language = settings.language_code();
+    std::thread::spawn(move || {
+        if !matches!(speech, SpeechConfig::Local { .. }) {
+            unload();
+            return;
+        }
+        if let Ok(engine) = take_engine(&speech, &language) {
+            keep_engine(&speech, language, engine);
+        }
+    });
+}
+
 pub fn begin_recording(
     session: &SessionState,
     app: &AppHandle,
-    destination: Option<Destination>,
+    destination: Option<Target>,
     verifier: Option<&Arc<Mutex<Verifier>>>,
 ) -> Result<u64, String> {
     let mut session = lock(session)?;
@@ -90,12 +178,22 @@ pub fn begin_recording(
         language: session.settings.language_code(),
     };
     let index = job.microphone_index;
+    let live = job
+        .speech
+        .streams()
+        .then(|| (job.speech.clone(), job.language.clone()));
     let id = session
         .coordinator
         .start(job, destination.clone(), Instant::now())
         .ok_or("Dictation is already active")?;
+    // Only another app's field needs watching; Yap's own window checks its
+    // field itself when the text arrives.
     if let Some(verifier) = verifier {
-        lock(verifier)?.capture(id, destination.clone());
+        match &destination {
+            Some(Target::Yap) => lock(verifier)?.cancel(),
+            Some(Target::App(field)) => lock(verifier)?.capture(id, Some(field.clone())),
+            None => lock(verifier)?.capture(id, None),
+        }
     }
 
     #[cfg(all(debug_assertions, feature = "input-test"))]
@@ -120,6 +218,7 @@ pub fn begin_recording(
             return Err(error);
         }
     };
+    let tap = capture.tap();
     session.cancelled = Arc::new(AtomicBool::new(false));
     session.history_meta = None;
     session.last_insert = None;
@@ -128,7 +227,122 @@ pub fn begin_recording(
     session.capture = Some(capture);
     drop(session);
     overlay::track_recording(app, id);
+    if let Some((speech, language)) = live {
+        start_live(app, id, speech, language, tap);
+    }
     Ok(id)
+}
+
+/// A streaming engine's session for the recording in progress.
+struct Live {
+    id: u64,
+    session: Box<dyn speech::LiveSession>,
+    /// Raw capture samples already fed.
+    fed: usize,
+}
+
+static LIVE: Mutex<Option<Live>> = Mutex::new(None);
+
+fn take_live(id: u64) -> Option<Live> {
+    let mut live = LIVE.lock().ok()?;
+    if live.as_ref().is_some_and(|live| live.id == id) {
+        live.take()
+    } else {
+        None
+    }
+}
+
+fn clear_live() {
+    if let Ok(mut live) = LIVE.lock() {
+        *live = None;
+    }
+}
+
+/// Feeds a streaming engine while recording `id` and shows its partial text
+/// in the overlay. The final decode happens in `stop_recording`, which takes
+/// the session over. If the model is still loading when the key is released,
+/// `stop_recording` falls back to transcribing the whole recording.
+fn start_live(
+    app: &AppHandle,
+    id: u64,
+    speech: SpeechConfig,
+    language: Option<String>,
+    tap: audio::Tap,
+) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let still_recording = |app: &AppHandle| {
+            app.state::<SessionState>()
+                .lock()
+                .is_ok_and(|session| session.active_id == Some(id) && session.capture.is_some())
+        };
+        let Ok(mut engine) = take_engine(&speech, &language) else {
+            return;
+        };
+        let session = engine.start_live();
+        keep_engine(&speech, language, engine);
+        let Some(session) = session else {
+            return;
+        };
+        if !still_recording(&app) {
+            return;
+        }
+        if let Ok(mut live) = LIVE.lock() {
+            *live = Some(Live {
+                id,
+                session,
+                fed: 0,
+            });
+        }
+
+        let mut shown = String::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let active = app
+                .state::<SessionState>()
+                .lock()
+                .is_ok_and(|session| session.active_id == Some(id));
+            let text = {
+                let Ok(mut slot) = LIVE.lock() else {
+                    return;
+                };
+                let Some(live) = slot.as_mut().filter(|live| live.id == id) else {
+                    // `stop_recording` took the session.
+                    return;
+                };
+                if !active {
+                    *slot = None;
+                    return;
+                }
+                let fresh = tap.read_from(live.fed);
+                live.fed += fresh.len();
+                live.session.feed(tap.sample_rate, &fresh)
+            };
+            if text != shown {
+                overlay::partial(&app, &text);
+                shown = text;
+            }
+        }
+    });
+}
+
+/// Runs the transcript through the clean-up model. Any failure keeps the
+/// original words: clean-up must never lose a dictation.
+async fn polish(app: &AppHandle, text: String, cancelled: &Arc<AtomicBool>) -> String {
+    overlay::show(app, Overlay::Polishing);
+    let original = text.clone();
+    let cleaned = tauri::async_runtime::spawn_blocking(move || crate::assistant::clean(&text))
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+    match cleaned {
+        Ok(cleaned) if !cancelled.load(Ordering::Relaxed) => cleaned,
+        Ok(_) => original,
+        Err(error) => {
+            notify(app, format!("Inserted without clean-up: {error}"));
+            original
+        }
+    }
 }
 
 pub async fn stop_recording(
@@ -137,14 +351,19 @@ pub async fn stop_recording(
     expected: u64,
 ) -> Result<String, String> {
     let session = Arc::clone(session.inner());
-    let (id, capture, cancelled) = {
+    let (id, capture, cancelled, cleanup) = {
         let mut session = lock(&session)?;
         let id = session.active_id.ok_or("No recording is active")?;
         if expected != id {
             return Err("Cancelled".to_owned());
         }
         let capture = session.capture.take().ok_or("No recording is active")?;
-        (id, capture, Arc::clone(&session.cancelled))
+        (
+            id,
+            capture,
+            Arc::clone(&session.cancelled),
+            session.settings.cleanup_enabled,
+        )
     };
     let recording = capture.stop();
     // A recording that hit the length limit is still transcribed: the limit
@@ -153,7 +372,7 @@ pub async fn stop_recording(
         .as_ref()
         .ok()
         .map(audio::Recording::normalized_16k);
-    let (request, normalized) = {
+    let (request, normalized, raw) = {
         let mut session = lock(&session)?;
         if session.active_id != Some(id) || cancelled.load(Ordering::Relaxed) {
             return Err("Cancelled".to_owned());
@@ -168,7 +387,12 @@ pub async fn stop_recording(
             }
         };
         let normalized = normalized.unwrap_or_default();
+        crate::logfile::write(&format!(
+            "recording {id} stopped ({:.1}s)",
+            recording.samples.len() as f32 / recording.sample_rate.max(1) as f32
+        ));
         if !audio::meaningful_audio(&normalized) {
+            crate::logfile::write(&format!("recording {id}: no meaningful audio"));
             session.coordinator.release(id, false, Instant::now());
             session.active_id = None;
             return Ok("No meaningful audio".to_owned());
@@ -184,7 +408,13 @@ pub async fn stop_recording(
             engine,
             model,
         });
-        (request, normalized)
+        // Streaming engines finish from the raw capture they were fed.
+        let raw = request
+            .settings
+            .speech
+            .streams()
+            .then_some((recording.samples, recording.sample_rate));
+        (request, normalized, raw)
     };
     // Read what to show, then release the session lock before touching the
     // overlay: `overlay::show` locks the session itself.
@@ -215,18 +445,43 @@ pub async fn stop_recording(
             return Ok("Yap test ✓".to_owned());
         }
 
-        let mut provider =
-            speech::load_provider(&request.settings.speech, request.settings.language.as_deref())?;
-        provider
+        if let (Some((samples, rate)), Some(live)) = (raw, take_live(id)) {
+            let mut session = live.session;
+            session.feed(rate, samples.get(live.fed..).unwrap_or_default());
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Cancelled".to_owned());
+            }
+            return Ok(session.finish());
+        }
+
+        let speech = &request.settings.speech;
+        let language = request.settings.language.clone();
+        let mut provider = take_engine(speech, &language)?;
+        let result = provider
             .transcribe(&normalized, &cancelled)
-            .map(|transcript| transcript.text)
+            .map(|transcript| transcript.text);
+        keep_engine(speech, language, provider);
+        result
     })
     .await;
-    let mut session = lock(&session)?;
     let result = match result {
         Ok(result) => result,
         Err(error) => Err(error.to_string()),
     };
+    match &result {
+        Ok(text) => crate::logfile::write(&format!(
+            "transcribed {id} ({} words)",
+            text.split_whitespace().count()
+        )),
+        Err(error) => crate::logfile::write(&format!("transcription {id} failed: {error}")),
+    }
+    let result = match result {
+        Ok(text) if cleanup && yap_app::cleanup::worth_cleaning(&text) => {
+            Ok(polish(&app, text, &cancelled).await)
+        }
+        other => other,
+    };
+    let mut session = lock(&session)?;
     if session.active_id != Some(id) {
         return Err("Cancelled".to_owned());
     }
@@ -257,6 +512,7 @@ pub async fn stop_recording(
 
 pub fn cancel_recording(session: &SessionState, app: &AppHandle) -> Result<(), String> {
     overlay::hide(app);
+    clear_live();
     let mut session = lock(session)?;
     session.cancelled.store(true, Ordering::Relaxed);
     if let Some(id) = session.active_id.take() {
@@ -264,7 +520,6 @@ pub fn cancel_recording(session: &SessionState, app: &AppHandle) -> Result<(), S
     }
     session.capture = None;
     session.target = None;
-    session.trial_id = None;
     session.history_meta = None;
     drop(session);
     lock(app.state::<Arc<Mutex<Verifier>>>().inner())?.cancel();
@@ -304,7 +559,138 @@ fn send_text(text: &str, method: Insertion) -> bool {
     }
 }
 
+/// A finished insertion, for the overlay and History.
+struct Inserted {
+    app_name: String,
+    text: String,
+    meta: Option<HistoryMeta>,
+}
+
+/// Inserts recording `id`'s transcript where the talk key was pressed.
+/// Returns whether text was inserted.
 pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
+    let own = app
+        .state::<SessionState>()
+        .lock()
+        .is_ok_and(|session| session.target == Some(Target::Yap));
+    let result = if own {
+        insert_own(&app, id).await
+    } else {
+        insert_external(&app, id).await
+    };
+    // `None`: the dictation was cancelled or Yap is exiting; say nothing.
+    let Some(result) = result else {
+        hotkey::finish();
+        return false;
+    };
+    crate::logfile::write(&format!(
+        "insert {id}: {}",
+        result.as_ref().map_or_else(
+            |error| format!("failed: {error}"),
+            |done| format!("inserted into {}", done.app_name)
+        )
+    ));
+
+    let inserted = result.is_ok();
+    match result {
+        Ok(Inserted {
+            app_name,
+            text,
+            meta,
+        }) => {
+            overlay::flash(
+                &app,
+                Overlay::Done {
+                    words: text.split_whitespace().count(),
+                    app: app_name.clone(),
+                },
+            );
+            if let Some(meta) = meta {
+                save_history(&app, app_name, text, meta);
+            }
+            hotkey::finish();
+        }
+        Err(message) => {
+            hotkey::finish();
+            overlay::flash(
+                &app,
+                Overlay::Error {
+                    message: message.clone(),
+                },
+            );
+            notify(&app, message);
+        }
+    }
+    inserted
+}
+
+fn save_history(app: &AppHandle, app_name: String, text: String, meta: HistoryMeta) {
+    let result = app
+        .state::<Mutex<History>>()
+        .lock()
+        .map_err(|error| error.to_string())
+        .and_then(|mut history| {
+            history.add(
+                app_name,
+                meta.duration_seconds,
+                text,
+                meta.engine,
+                meta.model,
+            )
+        });
+    match result {
+        Ok(()) => {
+            let _ = app.emit_to("main", "history-updated", ());
+        }
+        Err(error) => notify(app, format!("Could not save history: {error}")),
+    }
+}
+
+/// Hands the text to Yap's own window, which inserts it at its cursor.
+async fn insert_own(app: &AppHandle, id: u64) -> Option<Result<Inserted, String>> {
+    let session_state = Arc::clone(app.state::<SessionState>().inner());
+    let (decision, meta) = {
+        let mut session = session_state.lock().ok()?;
+        if session.exiting || session.active_id != Some(id) {
+            return None;
+        }
+        // The page checks the field when the text arrives.
+        let decision = session.coordinator.begin_insert(id, true);
+        session.active_id = None;
+        session.target = None;
+        (decision, session.history_meta.take())
+    };
+    let Decision::Insert { text, .. } = decision else {
+        return Some(Err("Could not insert text".to_owned()));
+    };
+
+    let handle = app.clone();
+    let sent = text.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || own_window::insert(&handle, id, &sent))
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+    if let Ok(mut session) = session_state.lock() {
+        session.coordinator.insertion_result(id);
+        if result.is_ok() {
+            session.last_insert = Some(LastInsert {
+                id,
+                target: Target::Yap,
+                at: Instant::now(),
+            });
+        }
+    }
+    Some(result.map(|()| Inserted {
+        app_name: "Yap".to_owned(),
+        text,
+        meta,
+    }))
+}
+
+/// Types or pastes the text into another app, after checking that the field
+/// the talk key was pressed in still has focus.
+async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, String>> {
+    const LOST_FOCUS: &str = "Could not insert text — the original field lost focus";
     let session_for_wait = Arc::clone(app.state::<SessionState>().inner());
     let modifiers_ready = tauri::async_runtime::spawn_blocking(move || {
         wait_for_modifiers(
@@ -321,22 +707,31 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
     .unwrap_or(false);
     let verifier = Arc::clone(app.state::<Arc<Mutex<Verifier>>>().inner());
     let verified = tauri::async_runtime::spawn_blocking(move || {
-        verifier.lock().is_ok_and(|verifier| verifier.check(id))
+        let verified = verifier
+            .lock()
+            .map_err(|error| error.to_string())
+            .and_then(|verifier| verifier.check_reason(id));
+        if let Err(why) = &verified {
+            crate::logfile::write(&format!("insert {id}: field check failed: {why}"));
+        }
+        verified.is_ok()
     })
     .await
     .unwrap_or(false);
     let session_state = Arc::clone(app.state::<SessionState>().inner());
-    let (decision, history_meta, method) = {
-        let Ok(mut session) = session_state.lock() else {
-            return false;
-        };
+    let (decision, meta, method) = {
+        let mut session = session_state.lock().ok()?;
         if session.exiting || session.active_id != Some(id) {
-            return false;
+            return None;
         }
 
         let current = platform_input::focused_destination();
+        let original = match &session.target {
+            Some(Target::App(field)) => Some(field),
+            _ => None,
+        };
         let safe = platform_input::destination_verified(
-            session.target.as_ref(),
+            original,
             current.as_ref(),
             verified && modifiers_ready,
             platform_input::modifiers_released(),
@@ -350,84 +745,49 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
             session.settings.insertion,
         )
     };
-    let (inserted, entry) = match decision {
-        Decision::Insert {
-            destination: Some(destination),
-            text,
-            ..
-        } => {
-            let state = Arc::clone(&session_state);
-            let target = destination.clone();
-            let typed = text.clone();
-            let submitted = tauri::async_runtime::spawn_blocking(move || {
-                let still_focused = state.lock().is_ok_and(|session| !session.exiting)
-                    && platform_input::destination_verified(
-                        Some(&target),
-                        platform_input::focused_destination().as_ref(),
-                        true,
-                        platform_input::modifiers_released(),
-                    );
-                still_focused && send_text(&typed, method)
-            })
-            .await
-            .unwrap_or(false);
-            if let Ok(mut session) = session_state.lock() {
-                session.coordinator.insertion_result(id);
-                if submitted {
-                    session.last_insert = Some(LastInsert {
-                        destination: destination.clone(),
-                        at: Instant::now(),
-                    });
-                }
-            }
-            (submitted, submitted.then(|| (destination.app_name(), text)))
-        }
-        _ => (false, None),
+    let Decision::Insert {
+        destination: Some(Target::App(destination)),
+        text,
+        ..
+    } = decision
+    else {
+        return Some(Err(LOST_FOCUS.to_owned()));
     };
 
-    if let Some((app_name, text)) = &entry {
-        overlay::flash(
-            &app,
-            Overlay::Done {
-                words: text.split_whitespace().count(),
-                app: app_name.clone(),
-            },
-        );
-    }
-    if let (Some(meta), Some((app_name, text))) = (history_meta, entry) {
-        let result = app
-            .state::<Mutex<History>>()
-            .lock()
-            .map_err(|error| error.to_string())
-            .and_then(|mut history| {
-                history.add(
-                    app_name,
-                    meta.duration_seconds,
-                    text,
-                    meta.engine,
-                    meta.model,
-                )
+    let state = Arc::clone(&session_state);
+    let target = destination.clone();
+    let typed = text.clone();
+    let submitted = tauri::async_runtime::spawn_blocking(move || {
+        let still_focused = state.lock().is_ok_and(|session| !session.exiting)
+            && platform_input::destination_verified(
+                Some(&target),
+                platform_input::focused_destination().as_ref(),
+                true,
+                platform_input::modifiers_released(),
+            );
+        still_focused && send_text(&typed, method)
+    })
+    .await
+    .unwrap_or(false);
+    if let Ok(mut session) = session_state.lock() {
+        session.coordinator.insertion_result(id);
+        if submitted {
+            session.last_insert = Some(LastInsert {
+                id,
+                target: Target::App(destination.clone()),
+                at: Instant::now(),
             });
-        match result {
-            Ok(()) => {
-                let _ = app.emit_to("main", "history-updated", ());
-            }
-            Err(error) => notify(&app, format!("Could not save history: {error}")),
         }
     }
-
-    hotkey::finish();
-    if !inserted {
-        let message = "Could not insert text — the original field lost focus";
-        overlay::flash(
-            &app,
-            Overlay::Error {
-                message: message.to_owned(),
-            },
-        );
-        notify(&app, message);
-    }
-    inserted
+    Some(if submitted {
+        Ok(Inserted {
+            app_name: destination.app_name(),
+            text,
+            meta,
+        })
+    } else {
+        Err(LOST_FOCUS.to_owned())
+    })
 }
 
 fn fail(app: &AppHandle, message: String) {
@@ -453,28 +813,20 @@ fn fail(app: &AppHandle, message: String) {
 
 fn on_pressed(handle: &AppHandle, window: isize) {
     let same_foreground = window != 0 && platform_input::foreground_window_handle() == window;
-    let practicing = same_foreground
-        && handle
-            .state::<SessionState>()
-            .lock()
-            .is_ok_and(|session| session.trial_focused)
-        && platform_input::app_is_foreground();
-    if practicing {
-        match onboarding::trial_start(handle.state::<SessionState>(), handle.clone()) {
-            Ok(_) => {
-                let _ = handle.emit_to("main", "onboarding-listening", ());
-            }
-            Err(error) => {
-                hotkey::finish();
-                notify(handle, error);
-            }
-        }
-        return;
-    }
-
-    let destination = same_foreground
-        .then(platform_input::focused_destination)
-        .flatten();
+    crate::logfile::write(&format!(
+        "talk key pressed: yap_in_front={} same_foreground={same_foreground} toggle={}",
+        platform_input::app_is_foreground(),
+        hotkey::toggle_active()
+    ));
+    // Yap's own window takes the text directly; anything else is reached
+    // through the OS and watched until the text is inserted.
+    let destination = if !same_foreground {
+        None
+    } else if own_window::in_front(handle) {
+        Some(Target::Yap)
+    } else {
+        platform_input::focused_destination().map(Target::App)
+    };
     let verifier = Arc::clone(handle.state::<Arc<Mutex<Verifier>>>().inner());
     if let Err(error) = begin_recording(
         handle.state::<SessionState>().inner(),
@@ -494,33 +846,17 @@ fn on_pressed(handle: &AppHandle, window: isize) {
 }
 
 fn on_released(handle: &AppHandle) {
-    let Ok((id, cancelled, trial_id)) = handle.state::<SessionState>().lock().map(|session| {
-        (
-            session.active_id,
-            Arc::clone(&session.cancelled),
-            session.trial_id,
-        )
-    }) else {
+    let Ok((id, cancelled)) = handle
+        .state::<SessionState>()
+        .lock()
+        .map(|session| (session.active_id, Arc::clone(&session.cancelled)))
+    else {
         return;
     };
     let Some(id) = id else {
         return;
     };
     let handle = handle.clone();
-    if trial_id == Some(id) {
-        tauri::async_runtime::spawn(async move {
-            match onboarding::trial_end(id, handle.state::<SessionState>(), handle.clone()).await {
-                Ok(text) => {
-                    let _ = handle.emit_to("main", "onboarding-transcript", text);
-                }
-                Err(error) => notify(&handle, error),
-            }
-            overlay::hide(&handle);
-            hotkey::finish();
-        });
-        return;
-    }
-
     tauri::async_runtime::spawn(async move {
         let result = stop_recording(handle.state::<SessionState>(), handle.clone(), id).await;
         if cancelled.load(Ordering::Relaxed) {
@@ -542,7 +878,9 @@ fn on_released(handle: &AppHandle) {
 /// Handles talk-key events from the keyboard hook until the app exits.
 pub fn run_hotkey_events(handle: AppHandle, events: std::sync::mpsc::Receiver<hotkey::Event>) {
     std::thread::spawn(move || {
+        crate::logfile::write("talk-key listener running");
         for event in events {
+            crate::logfile::write(&format!("talk key event: {event:?}"));
             match event {
                 hotkey::Event::Pressed(window) => on_pressed(&handle, window),
                 hotkey::Event::Released => on_released(&handle),
@@ -593,7 +931,19 @@ mod tests {
         settings.local_model_path = Some(r"C:\models\ggml-base.bin".into());
         assert!(matches!(
             speech_config(&settings),
-            Ok(SpeechConfig::Local { model_id, .. }) if model_id == "ggml-base.bin"
+            Ok(SpeechConfig::Local { model_id, adapter, .. })
+                if model_id == "base" && adapter == "whisper.cpp"
+        ));
+        settings.local_model_path = Some(r"C:\models\parakeet-tdt-0.6b-v3".into());
+        assert!(matches!(
+            speech_config(&settings),
+            Ok(SpeechConfig::Local { model_id, adapter, .. })
+                if model_id == "parakeet-tdt-0.6b-v3" && adapter == "sherpa-onnx"
+        ));
+        settings.local_model_path = Some(r"C:\models\my-finetune.bin".into());
+        assert!(matches!(
+            speech_config(&settings),
+            Ok(SpeechConfig::Local { adapter, .. }) if adapter == "whisper.cpp"
         ));
         settings.engine = Engine::Cloud;
         settings.cloud_provider = "groq".into();
