@@ -1,33 +1,23 @@
 //! Runs the clean-up model: a `llama-server` helper process bound to
-//! 127.0.0.1 with a random API key, tied to Yap through a Windows job object
+//! 127.0.0.1 with a random API key, tied to Yap (`platform::HelperProcess`)
 //! so it is killed if Yap exits or crashes. Started in the background when
 //! clean-up is turned on (or at launch), stopped when it is turned off.
 
 use std::fs::File;
-use std::os::windows::io::AsRawHandle;
-use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
-};
 use yap_app::cleanup::{self, CleanupModel};
 use yap_app::settings::Settings;
 
 use crate::config;
+use crate::platform::{self, HelperProcess};
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// Windows exit code for "a required DLL was not found".
-const DLL_NOT_FOUND: i32 = 0xC000_0135_u32 as i32;
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -41,22 +31,10 @@ pub enum Status {
 
 struct Server {
     model_id: &'static str,
-    child: Child,
-    job: HANDLE,
+    process: HelperProcess,
     port: u16,
     key: String,
     ready: bool,
-}
-
-// The job handle is only used to close it; it is safe to move between threads.
-unsafe impl Send for Server {}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        unsafe { CloseHandle(self.job) };
-    }
 }
 
 static SERVER: Mutex<Option<Server>> = Mutex::new(None);
@@ -99,29 +77,6 @@ fn free_port() -> Result<u16, String> {
         .map_err(|_| "No free local port for clean-up".to_owned())
 }
 
-/// A job object that kills its processes when Yap's handle to it closes.
-fn kill_on_close_job() -> Result<HANDLE, String> {
-    unsafe {
-        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if job.is_null() {
-            return Err("Could not create a job object for clean-up".to_owned());
-        }
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        ) == 0
-        {
-            CloseHandle(job);
-            return Err("Could not configure clean-up process limits".to_owned());
-        }
-        Ok(job)
-    }
-}
-
 fn threads() -> usize {
     std::thread::available_parallelism()
         .map(|count| count.get().saturating_sub(2).clamp(1, 8))
@@ -133,7 +88,6 @@ fn spawn(model: &'static CleanupModel, models_dir: &Path) -> Result<Server, Stri
     let port = free_port()?;
     let key = random_key();
     let log = File::create(cleanup::directory(models_dir).join("server.log")).ok();
-    let job = kill_on_close_job()?;
     let mut command = Command::new(runtime.join(cleanup::SERVER_EXE));
     command
         .current_dir(&runtime)
@@ -155,20 +109,12 @@ fn spawn(model: &'static CleanupModel, models_dir: &Path) -> Result<Server, Stri
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(log.map_or_else(Stdio::null, Stdio::from))
-        .creation_flags(CREATE_NO_WINDOW);
-    let child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            unsafe { CloseHandle(job) };
-            return Err(format!("Could not start clean-up: {error}"));
-        }
-    };
-    unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) };
+        .stderr(log.map_or_else(Stdio::null, Stdio::from));
+    let process = HelperProcess::spawn(command)
+        .map_err(|error| format!("Could not start clean-up: {error}"))?;
     Ok(Server {
         model_id: model.id,
-        child,
-        job,
+        process,
         port,
         key,
         ready: false,
@@ -188,9 +134,9 @@ fn wait_ready(port: u16, key: &str) -> Result<(), String> {
             let Some(server) = server.as_mut().filter(|server| server.port == port) else {
                 return Err("Cancelled".to_owned());
             };
-            if let Ok(Some(exit)) = server.child.try_wait() {
-                return Err(if exit.code() == Some(DLL_NOT_FOUND) {
-                    "Clean-up needs the Microsoft Visual C++ Redistributable (x64). Install it from Microsoft, then turn clean-up on again.".to_owned()
+            if let Ok(Some(exit)) = server.process.try_wait() {
+                return Err(if let Some(runtime) = platform::missing_runtime(&exit) {
+                    format!("Clean-up needs {runtime}. Install it, then turn clean-up on again.")
                 } else {
                     format!(
                         "Clean-up stopped while loading ({exit}); see server.log in the models folder"

@@ -11,11 +11,10 @@
 //! - `commands`    Settings / History / tray window commands
 //! - `talk_key_state` talk-key state shared with the platform keyboard hook
 //! - `platform`    the OS interface; `platform/windows` implements it
-//! - `audio`, `autostart`: OS I/O
+//! - `audio`       microphone capture
 
 mod assistant;
 mod audio;
-mod autostart;
 mod commands;
 mod config;
 mod dictation;
@@ -163,7 +162,7 @@ fn main() {
             }
             dictation::run_talk_key_events(app.handle().clone(), events);
 
-            if autostart::launched_in_background()
+            if platform::launched_in_background()
                 && let Some(window) = app.get_webview_window("main")
             {
                 let _ = window.hide();

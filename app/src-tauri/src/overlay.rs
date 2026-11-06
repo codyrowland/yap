@@ -72,7 +72,7 @@ pub fn show(app: &AppHandle, state: Overlay) {
         return;
     };
     if matches!(state, Overlay::Hidden) || !enabled(app) {
-        set_visible(&window, false);
+        platform::set_visible_without_focus(&window, false);
         let _ = app.emit_to(LABEL, "overlay-state", Overlay::Hidden);
         return;
     }
@@ -81,44 +81,7 @@ pub fn show(app: &AppHandle, state: Overlay) {
         place(app);
     }
     let _ = app.emit_to(LABEL, "overlay-state", &state);
-    set_visible(&window, true);
-}
-
-/// Shows or hides the overlay without ever activating it.
-///
-/// Tauri's `show()` calls `ShowWindow(SW_SHOW)`, which activates the window
-/// even though it is marked not focusable. Windows only lets that happen
-/// while Yap is the foreground app, so dictating into Yap's own window had
-/// the overlay take focus from the text box (and sometimes not give it
-/// back). Other apps were never affected because Windows blocks the
-/// activation there. `SW_SHOWNOACTIVATE` shows it without taking focus.
-///
-/// Both directions go through Win32 so Tauri's idea of the window's
-/// visibility never disagrees with what is on screen.
-#[cfg(windows)]
-fn set_visible(window: &tauri::WebviewWindow, visible: bool) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SetWindowPos, ShowWindow,
-    };
-    let Ok(hwnd) = window.hwnd() else {
-        return;
-    };
-    unsafe {
-        if visible {
-            SetWindowPos(
-                hwnd.0,
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
-
-        ShowWindow(hwnd.0, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
-    }
+    platform::set_visible_without_focus(&window, true);
 }
 
 /// The overlay must never keep focus. Even shown with `SW_SHOWNOACTIVATE`
@@ -132,40 +95,20 @@ fn set_visible(window: &tauri::WebviewWindow, visible: bool) {
 /// Only acts when the overlay really is the active window: clicking Stop
 /// while dictating into another app gives the overlay's page focus without
 /// activating it, and must not pull Yap's window to the front.
-#[cfg(windows)]
 pub fn give_back_focus(app: &AppHandle) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
     let (Some(overlay), Some(main)) = (
         app.get_webview_window(LABEL),
         app.get_webview_window(crate::own_window::WINDOW),
     ) else {
         return;
     };
-    let (Ok(overlay_hwnd), Ok(main_hwnd)) = (overlay.hwnd(), main.hwnd()) else {
-        return;
-    };
-    if unsafe { GetForegroundWindow() } != overlay_hwnd.0 || !main.is_visible().unwrap_or(false) {
+    if !platform::is_active_window(&overlay) || !main.is_visible().unwrap_or(false) {
         return;
     }
     crate::logfile::write("overlay took focus; giving it back to the main window");
-    unsafe {
-        SetForegroundWindow(main_hwnd.0);
-    }
+    platform::activate_window(&main);
     let webview: &tauri::Webview = main.as_ref();
     let _ = webview.set_focus();
-}
-
-#[cfg(not(windows))]
-pub fn give_back_focus(_app: &AppHandle) {}
-
-// macOS and Linux need their own non-activating show (an NSPanel on macOS).
-#[cfg(not(windows))]
-fn set_visible(window: &tauri::WebviewWindow, visible: bool) {
-    let _ = if visible {
-        window.show()
-    } else {
-        window.hide()
-    };
 }
 
 /// Live text from a streaming engine while recording.

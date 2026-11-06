@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use yap_app::settings::Settings;
 
 use crate::state::{SessionState, SharedSettings, lock};
-use crate::{audio, autostart, talk_key_state};
+use crate::{audio, platform, talk_key_state};
 
 const SETTINGS_FILE: &str = "settings.json";
 const LEGACY_SETTINGS_FILE: &str = "settings.txt";
@@ -130,7 +130,7 @@ pub fn apply(
         write_settings(&directory, &next)
     })?;
     if next.open_at_login != current.open_at_login
-        && let Err(error) = autostart::set(next.open_at_login)
+        && let Err(error) = platform::set_open_at_login(next.open_at_login)
     {
         // Keep the rest of the change; report that this part failed.
         next.open_at_login = current.open_at_login;

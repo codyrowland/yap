@@ -1,13 +1,13 @@
 //! "Open at login": a value under the current user's Run key that starts Yap
 //! in the tray (`--background`) when they sign in.
 
+use crate::platform::BACKGROUND_ARG;
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW, RegOpenKeyExW,
     RegSetValueExW,
 };
 
-pub const BACKGROUND_ARG: &str = "--background";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "Yap";
 
@@ -56,8 +56,4 @@ pub fn set(enabled: bool) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-pub fn launched_in_background() -> bool {
-    std::env::args().any(|arg| arg == BACKGROUND_ARG)
 }

@@ -3,9 +3,16 @@ mod windows;
 #[cfg(windows)]
 use windows as imp;
 
+use std::process::ExitStatus;
+
+use tauri::WebviewWindow;
+
 pub use imp::field_watch::FieldWatch;
+pub use imp::helper_process::HelperProcess;
 pub use imp::input::Destination;
 pub use imp::keyboard_hook;
+
+pub const BACKGROUND_ARG: &str = "--background";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WindowId(isize);
@@ -53,4 +60,28 @@ pub fn undo() -> bool {
 
 pub fn accessibility_ready() -> bool {
     imp::input::accessibility_ready()
+}
+
+pub fn set_open_at_login(enabled: bool) -> Result<(), String> {
+    imp::autostart::set(enabled)
+}
+
+pub fn launched_in_background() -> bool {
+    std::env::args().any(|arg| arg == BACKGROUND_ARG)
+}
+
+pub fn set_visible_without_focus(window: &WebviewWindow, visible: bool) {
+    imp::window::set_visible_without_focus(window, visible);
+}
+
+pub fn is_active_window(window: &WebviewWindow) -> bool {
+    imp::window::is_active(window)
+}
+
+pub fn activate_window(window: &WebviewWindow) {
+    imp::window::activate(window);
+}
+
+pub fn missing_runtime(exit: &ExitStatus) -> Option<&'static str> {
+    imp::helper_process::missing_runtime(exit)
 }
