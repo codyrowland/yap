@@ -88,7 +88,7 @@ Removes "um"s and false starts, fixes grammar and punctuation, turns spoken list
 
 Review (Nov 2026): the core library (coordinator, speech engines, settings, history, catalogs) is in good shape; the app layer grew in place while fixing bugs. Do these before the platform refactor, in this order, since they touch the same files. Each step keeps Windows behaving the same and is checked with the build, the tests and a short dictation round on Windows.
 
-- [ ] Coordinator owns the whole job. `Session` duplicates it (`active_id`, `target`, `cancelled`, `history_meta`, `last_insert`) and keeps the copies in sync by hand, which caused the onboarding job stuck in Inserting; `active_id != Some(id)`-style checks appear about 40 times.
+- [x] Coordinator owns the whole job. `Session` duplicates it (`active_id`, `target`, `cancelled`, `history_meta`, `last_insert`) and keeps the copies in sync by hand, which caused the onboarding job stuck in Inserting; `active_id != Some(id)`-style checks appear about 40 times.
 - [ ] Settings get their own lock (or are swapped in whole), separate from the dictation job. Reading a setting currently locks the whole session; that caused the OpenAI freeze, and `overlay::enabled` still needs `try_lock` to avoid it.
 - [ ] Split `dictation.rs` (~960 lines: engine cache, live streaming, recording, transcription, clean-up, both insertion paths, history saving, overlay updates, talk-key event loop) into a short pipeline plus engines, live, insert and history modules.
 - [ ] Split `hotkey.rs` (~960 lines): key names and parsing, the hold/toggle state machine and key capture are portable and move to the library with tests; the Windows hook and the debug trace move to the Windows platform code.

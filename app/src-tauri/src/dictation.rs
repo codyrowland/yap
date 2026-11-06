@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use yap_app::coordinator::{Decision, Settings as JobSettings};
+use yap_app::coordinator::{Decision, JobInfo, Settings as JobSettings};
 use yap_app::history::History;
 use yap_app::models::Family;
 use yap_app::settings::{Engine, Insertion, Settings};
@@ -14,7 +14,7 @@ use yap_app::speech::{self, SpeechConfig};
 
 use crate::overlay::{self, Overlay};
 use crate::platform_input::{self, Verifier};
-use crate::state::{HistoryMeta, LastInsert, SessionState, Target, lock};
+use crate::state::{SessionState, Target, lock};
 use crate::{audio, clipboard, hotkey, own_window};
 
 /// Tells the settings window (and onboarding) what happened.
@@ -211,7 +211,7 @@ pub fn begin_recording(
     let capture = match capture {
         Ok(capture) => capture,
         Err(error) => {
-            session.coordinator.cancel(id);
+            session.coordinator.fail(id);
             if let Some(verifier) = verifier {
                 lock(verifier)?.cancel();
             }
@@ -219,11 +219,6 @@ pub fn begin_recording(
         }
     };
     let tap = capture.tap();
-    session.cancelled = Arc::new(AtomicBool::new(false));
-    session.history_meta = None;
-    session.last_insert = None;
-    session.active_id = Some(id);
-    session.target = destination;
     session.capture = Some(capture);
     drop(session);
     overlay::track_recording(app, id);
@@ -274,7 +269,7 @@ fn start_live(
         let still_recording = |app: &AppHandle| {
             app.state::<SessionState>()
                 .lock()
-                .is_ok_and(|session| session.active_id == Some(id) && session.capture.is_some())
+                .is_ok_and(|session| session.coordinator.is_active(id) && session.capture.is_some())
         };
         let Ok(mut engine) = take_engine(&speech, &language) else {
             return;
@@ -301,7 +296,7 @@ fn start_live(
             let active = app
                 .state::<SessionState>()
                 .lock()
-                .is_ok_and(|session| session.active_id == Some(id));
+                .is_ok_and(|session| session.coordinator.is_active(id));
             let text = {
                 let Ok(mut slot) = LIVE.lock() else {
                     return;
@@ -353,17 +348,19 @@ pub async fn stop_recording(
     let session = Arc::clone(session.inner());
     let (id, capture, cancelled, cleanup) = {
         let mut session = lock(&session)?;
-        let id = session.active_id.ok_or("No recording is active")?;
+        let id = session
+            .coordinator
+            .active_id()
+            .ok_or("No recording is active")?;
         if expected != id {
             return Err("Cancelled".to_owned());
         }
+        let cancelled = session
+            .coordinator
+            .cancel_flag(id)
+            .ok_or("No recording is active")?;
         let capture = session.capture.take().ok_or("No recording is active")?;
-        (
-            id,
-            capture,
-            Arc::clone(&session.cancelled),
-            session.settings.cleanup_enabled,
-        )
+        (id, capture, cancelled, session.settings.cleanup_enabled)
     };
     let recording = capture.stop();
     // A recording that hit the length limit is still transcribed: the limit
@@ -374,40 +371,32 @@ pub async fn stop_recording(
         .map(audio::Recording::normalized_16k);
     let (request, normalized, raw) = {
         let mut session = lock(&session)?;
-        if session.active_id != Some(id) || cancelled.load(Ordering::Relaxed) {
+        if !session.coordinator.is_active(id) || cancelled.load(Ordering::Relaxed) {
             return Err("Cancelled".to_owned());
         }
 
         let recording = match recording {
             Ok(recording) => recording,
             Err(error) => {
-                session.coordinator.cancel(id);
-                session.active_id = None;
+                session.coordinator.fail(id);
                 return Err(error);
             }
         };
         let normalized = normalized.unwrap_or_default();
-        crate::logfile::write(&format!(
-            "recording {id} stopped ({:.1}s)",
-            recording.samples.len() as f32 / recording.sample_rate.max(1) as f32
-        ));
+        let seconds = recording.samples.len() as f32 / recording.sample_rate.max(1) as f32;
+        crate::logfile::write(&format!("recording {id} stopped ({seconds:.1}s)"));
         if !audio::meaningful_audio(&normalized) {
             crate::logfile::write(&format!("recording {id}: no meaningful audio"));
-            session.coordinator.release(id, false, Instant::now());
-            session.active_id = None;
+            session.coordinator.release(id, None, Instant::now());
             return Ok("No meaningful audio".to_owned());
         }
 
-        let Some(request) = session.coordinator.release(id, true, Instant::now()) else {
-            session.active_id = None;
+        let Some(request) = session
+            .coordinator
+            .release(id, Some(seconds), Instant::now())
+        else {
             return Err("Recording timed out".to_owned());
         };
-        let (engine, model) = request.settings.speech.describe();
-        session.history_meta = Some(HistoryMeta {
-            duration_seconds: recording.samples.len() as f32 / recording.sample_rate as f32,
-            engine,
-            model,
-        });
         // Streaming engines finish from the raw capture they were fed.
         let raw = request
             .settings
@@ -416,18 +405,8 @@ pub async fn stop_recording(
             .then_some((recording.samples, recording.sample_rate));
         (request, normalized, raw)
     };
-    // Read what to show, then release the session lock before touching the
-    // overlay: `overlay::show` locks the session itself.
-    let transcribing = lock(&session)?
-        .history_meta
-        .as_ref()
-        .map(|meta| Overlay::Transcribing {
-            engine: meta.engine.clone(),
-            model: meta.model.clone(),
-        });
-    if let Some(state) = transcribing {
-        overlay::show(&app, state);
-    }
+    let (engine, model) = request.settings.speech.describe();
+    overlay::show(&app, Overlay::Transcribing { engine, model });
 
     let worker_cancelled = Arc::clone(&cancelled);
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
@@ -482,7 +461,7 @@ pub async fn stop_recording(
         other => other,
     };
     let mut session = lock(&session)?;
-    if session.active_id != Some(id) {
+    if !session.coordinator.is_active(id) {
         return Err("Cancelled".to_owned());
     }
 
@@ -494,17 +473,9 @@ pub async fn stop_recording(
         {
             Ok(text)
         }
-        Ok(_) => {
-            session.active_id = None;
-            session.target = None;
-            session.history_meta = None;
-            Err("Transcription was empty or timed out".to_owned())
-        }
+        Ok(_) => Err("Transcription was empty or timed out".to_owned()),
         Err(error) => {
-            session.coordinator.cancel(id);
-            session.active_id = None;
-            session.target = None;
-            session.history_meta = None;
+            session.coordinator.fail(id);
             Err(error)
         }
     }
@@ -514,13 +485,8 @@ pub fn cancel_recording(session: &SessionState, app: &AppHandle) -> Result<(), S
     overlay::hide(app);
     clear_live();
     let mut session = lock(session)?;
-    session.cancelled.store(true, Ordering::Relaxed);
-    if let Some(id) = session.active_id.take() {
-        session.coordinator.cancel(id);
-    }
+    session.coordinator.cancel_current();
     session.capture = None;
-    session.target = None;
-    session.history_meta = None;
     drop(session);
     lock(app.state::<Arc<Mutex<Verifier>>>().inner())?.cancel();
     Ok(())
@@ -563,16 +529,15 @@ fn send_text(text: &str, method: Insertion) -> bool {
 struct Inserted {
     app_name: String,
     text: String,
-    meta: Option<HistoryMeta>,
+    info: JobInfo,
 }
 
 /// Inserts recording `id`'s transcript where the talk key was pressed.
 /// Returns whether text was inserted.
 pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
-    let own = app
-        .state::<SessionState>()
-        .lock()
-        .is_ok_and(|session| session.target == Some(Target::Yap));
+    let own = app.state::<SessionState>().lock().is_ok_and(|session| {
+        matches!(session.coordinator.destination(id), Some(Some(Target::Yap)))
+    });
     let result = if own {
         insert_own(&app, id).await
     } else {
@@ -596,7 +561,7 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
         Ok(Inserted {
             app_name,
             text,
-            meta,
+            info,
         }) => {
             overlay::flash(
                 &app,
@@ -605,9 +570,7 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
                     app: app_name.clone(),
                 },
             );
-            if let Some(meta) = meta {
-                save_history(&app, app_name, text, meta);
-            }
+            save_history(&app, app_name, text, info);
             hotkey::finish();
         }
         Err(message) => {
@@ -624,7 +587,7 @@ pub async fn insert_transcript(app: AppHandle, id: u64) -> bool {
     inserted
 }
 
-fn save_history(app: &AppHandle, app_name: String, text: String, meta: HistoryMeta) {
+fn save_history(app: &AppHandle, app_name: String, text: String, info: JobInfo) {
     let result = app
         .state::<Mutex<History>>()
         .lock()
@@ -632,10 +595,10 @@ fn save_history(app: &AppHandle, app_name: String, text: String, meta: HistoryMe
         .and_then(|mut history| {
             history.add(
                 app_name,
-                meta.duration_seconds,
+                info.duration_seconds,
                 text,
-                meta.engine,
-                meta.model,
+                info.engine,
+                info.model,
             )
         });
     match result {
@@ -649,18 +612,15 @@ fn save_history(app: &AppHandle, app_name: String, text: String, meta: HistoryMe
 /// Hands the text to Yap's own window, which inserts it at its cursor.
 async fn insert_own(app: &AppHandle, id: u64) -> Option<Result<Inserted, String>> {
     let session_state = Arc::clone(app.state::<SessionState>().inner());
-    let (decision, meta) = {
+    let decision = {
         let mut session = session_state.lock().ok()?;
-        if session.exiting || session.active_id != Some(id) {
+        if !session.coordinator.is_active(id) {
             return None;
         }
         // The page checks the field when the text arrives.
-        let decision = session.coordinator.begin_insert(id, true);
-        session.active_id = None;
-        session.target = None;
-        (decision, session.history_meta.take())
+        session.coordinator.begin_insert(id, true)
     };
-    let Decision::Insert { text, .. } = decision else {
+    let Decision::Insert { text, info, .. } = decision else {
         return Some(Err("Could not insert text".to_owned()));
     };
 
@@ -671,19 +631,14 @@ async fn insert_own(app: &AppHandle, id: u64) -> Option<Result<Inserted, String>
             .await
             .unwrap_or_else(|error| Err(error.to_string()));
     if let Ok(mut session) = session_state.lock() {
-        session.coordinator.insertion_result(id);
-        if result.is_ok() {
-            session.last_insert = Some(LastInsert {
-                id,
-                target: Target::Yap,
-                at: Instant::now(),
-            });
-        }
+        session
+            .coordinator
+            .insertion_result(id, result.is_ok(), Instant::now());
     }
     Some(result.map(|()| Inserted {
         app_name: "Yap".to_owned(),
         text,
-        meta,
+        info,
     }))
 }
 
@@ -697,7 +652,7 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
             || {
                 session_for_wait
                     .lock()
-                    .is_ok_and(|session| session.active_id == Some(id))
+                    .is_ok_and(|session| session.coordinator.is_active(id))
             },
             platform_input::modifiers_released,
             std::time::Duration::from_secs(1),
@@ -719,15 +674,15 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
     .await
     .unwrap_or(false);
     let session_state = Arc::clone(app.state::<SessionState>().inner());
-    let (decision, meta, method) = {
+    let (decision, method) = {
         let mut session = session_state.lock().ok()?;
-        if session.exiting || session.active_id != Some(id) {
+        if !session.coordinator.is_active(id) {
             return None;
         }
 
         let current = platform_input::focused_destination();
-        let original = match &session.target {
-            Some(Target::App(field)) => Some(field),
+        let original = match session.coordinator.destination(id) {
+            Some(Some(Target::App(field))) => Some(field),
             _ => None,
         };
         let safe = platform_input::destination_verified(
@@ -737,17 +692,12 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
             platform_input::modifiers_released(),
         );
         let decision = session.coordinator.begin_insert(id, safe);
-        session.active_id = None;
-        session.target = None;
-        (
-            decision,
-            session.history_meta.take(),
-            session.settings.insertion,
-        )
+        (decision, session.settings.insertion)
     };
     let Decision::Insert {
         destination: Some(Target::App(destination)),
         text,
+        info,
         ..
     } = decision
     else {
@@ -758,7 +708,9 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
     let target = destination.clone();
     let typed = text.clone();
     let submitted = tauri::async_runtime::spawn_blocking(move || {
-        let still_focused = state.lock().is_ok_and(|session| !session.exiting)
+        let still_focused = state
+            .lock()
+            .is_ok_and(|session| !session.coordinator.closed())
             && platform_input::destination_verified(
                 Some(&target),
                 platform_input::focused_destination().as_ref(),
@@ -770,20 +722,15 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
     .await
     .unwrap_or(false);
     if let Ok(mut session) = session_state.lock() {
-        session.coordinator.insertion_result(id);
-        if submitted {
-            session.last_insert = Some(LastInsert {
-                id,
-                target: Target::App(destination.clone()),
-                at: Instant::now(),
-            });
-        }
+        session
+            .coordinator
+            .insertion_result(id, submitted, Instant::now());
     }
     Some(if submitted {
         Ok(Inserted {
             app_name: destination.app_name(),
             text,
-            meta,
+            info,
         })
     } else {
         Err(LOST_FOCUS.to_owned())
@@ -846,14 +793,13 @@ fn on_pressed(handle: &AppHandle, window: isize) {
 }
 
 fn on_released(handle: &AppHandle) {
-    let Ok((id, cancelled)) = handle
-        .state::<SessionState>()
-        .lock()
-        .map(|session| (session.active_id, Arc::clone(&session.cancelled)))
-    else {
+    let Ok(job) = handle.state::<SessionState>().lock().map(|session| {
+        let id = session.coordinator.active_id()?;
+        Some((id, session.coordinator.cancel_flag(id)?))
+    }) else {
         return;
     };
-    let Some(id) = id else {
+    let Some((id, cancelled)) = job else {
         return;
     };
     let handle = handle.clone();
@@ -865,7 +811,7 @@ fn on_released(handle: &AppHandle) {
         let still_active = handle
             .state::<SessionState>()
             .lock()
-            .is_ok_and(|session| session.active_id == Some(id));
+            .is_ok_and(|session| session.coordinator.is_active(id));
         match result {
             Ok(_) if still_active => {
                 insert_transcript(handle, id).await;

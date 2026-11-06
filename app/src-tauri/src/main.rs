@@ -60,7 +60,7 @@ fn start_history_expiry(handle: AppHandle) {
             if handle
                 .state::<SessionState>()
                 .lock()
-                .is_ok_and(|session| session.exiting)
+                .is_ok_and(|session| session.coordinator.closed())
             {
                 break;
             }

@@ -225,7 +225,7 @@ pub fn track_recording(app: &AppHandle, id: u64) {
                 let Ok(session) = state.lock() else {
                     return;
                 };
-                if session.active_id != Some(id) {
+                if !session.coordinator.is_active(id) {
                     return;
                 }
                 match session.capture.as_ref() {
@@ -258,16 +258,16 @@ pub async fn overlay_undo(
     app: AppHandle,
     session: tauri::State<'_, SessionState>,
 ) -> Result<(), String> {
-    let last = crate::state::lock(&session)?.last_insert.take();
+    let last = crate::state::lock(&session)?.coordinator.take_last_insert();
     let Some(last) = last else {
         return Err("Nothing to undo".to_owned());
     };
     let recent = last.at.elapsed() <= DONE_VISIBLE + Duration::from_secs(2);
     let handle = app.clone();
     let undone = recent
-        && tauri::async_runtime::spawn_blocking(move || match last.target {
-            Target::Yap => crate::own_window::undo(&handle, last.id).is_ok(),
-            Target::App(destination) => {
+        && tauri::async_runtime::spawn_blocking(move || match last.destination {
+            Some(Target::Yap) => crate::own_window::undo(&handle, last.id).is_ok(),
+            Some(Target::App(destination)) => {
                 platform_input::destination_verified(
                     Some(&destination),
                     platform_input::focused_destination().as_ref(),
@@ -275,6 +275,7 @@ pub async fn overlay_undo(
                     platform_input::modifiers_released(),
                 ) && crate::clipboard::undo()
             }
+            None => false,
         })
         .await
         .unwrap_or(false);

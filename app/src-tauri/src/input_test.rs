@@ -76,8 +76,6 @@ pub fn start(app: AppHandle) {
                                     Instant::now(),
                                 )
                                 .unwrap();
-                            session.active_id = Some(id);
-                            session.target = target.clone();
                             last_id = Some(id);
                             app.state::<Arc<Mutex<Verifier>>>()
                                 .lock()
@@ -115,10 +113,10 @@ pub fn start(app: AppHandle) {
                 "release" => {
                     let state = app.state::<SessionState>();
                     let mut session = state.lock().unwrap();
-                    if session.active_id.is_some_and(|id| {
+                    if session.coordinator.active_id().is_some_and(|id| {
                         session
                             .coordinator
-                            .release(id, true, Instant::now())
+                            .release(id, Some(1.0), Instant::now())
                             .is_some()
                     }) {
                         Ok("released".to_owned())
@@ -129,7 +127,7 @@ pub fn start(app: AppHandle) {
                 "transcript" => {
                     let state = app.state::<SessionState>();
                     let mut session = state.lock().unwrap();
-                    if session.active_id.is_some_and(|id| {
+                    if session.coordinator.active_id().is_some_and(|id| {
                         session
                             .coordinator
                             .transcript(id, "Yap test ✓".to_owned(), Instant::now())
@@ -145,7 +143,7 @@ pub fn start(app: AppHandle) {
                     if session.coordinator.phase() != Phase::Ready {
                         Err("Job is not ready".to_owned())
                     } else {
-                        let id = session.active_id.unwrap();
+                        let id = session.coordinator.active_id().unwrap();
                         drop(session);
                         let inserted =
                             tauri::async_runtime::block_on(insert_transcript(app.clone(), id));
