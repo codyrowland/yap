@@ -1,7 +1,6 @@
 //! Tray icon and its popover (design 2i). Left-click opens the popover above
 //! the icon; right-click shows a small native menu as a fallback.
 
-use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Emitter, Manager, PhysicalPosition, Rect};
@@ -10,40 +9,6 @@ use crate::commands::tray::show_main;
 
 pub const LABEL: &str = "tray";
 const GAP: f64 = 8.0;
-
-/// A 32×32 microphone glyph in the accent colour, drawn at runtime so the
-/// app needs no icon asset for the tray.
-fn icon() -> Image<'static> {
-    const SIZE: usize = 32;
-    let mut rgba = vec![0_u8; SIZE * SIZE * 4];
-    let accent = [0xB6, 0x82, 0x35, 0xFF];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            // Capsule body.
-            let in_body = {
-                let (cx, top, bottom, radius) = (16.0, 9.0, 16.0, 5.0);
-                let dy = if fy < top {
-                    top - fy
-                } else if fy > bottom {
-                    fy - bottom
-                } else {
-                    0.0
-                };
-                ((fx - cx).powi(2) + dy.powi(2)).sqrt() <= radius
-            };
-            // Holder arc, stem and base.
-            let distance = ((fx - 16.0).powi(2) + (fy - 16.0).powi(2)).sqrt();
-            let in_arc = fy >= 16.0 && (7.5..=9.5).contains(&distance);
-            let in_stem = (15.0..=17.0).contains(&fx) && (25.0..=28.0).contains(&fy);
-            let in_base = (11.0..=21.0).contains(&fx) && (28.0..=30.0).contains(&fy);
-            if in_body || in_arc || in_stem || in_base {
-                rgba[(y * SIZE + x) * 4..][..4].copy_from_slice(&accent);
-            }
-        }
-    }
-    Image::new_owned(rgba, SIZE as u32, SIZE as u32)
-}
 
 /// Places the popover just above (or below, for a top taskbar) the icon,
 /// kept inside the monitor's work area.
@@ -99,8 +64,12 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let history = MenuItem::with_id(app, "history", "History…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Yap", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&history, &settings, &quit])?;
-    TrayIconBuilder::with_id("yap")
-        .icon(icon())
+    let mut builder = TrayIconBuilder::with_id("yap");
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    builder
         .tooltip("Yap")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -127,19 +96,4 @@ pub fn install(app: &App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn tray_icon_has_visible_pixels_inside_the_square() {
-        let icon = super::icon();
-        assert_eq!((icon.width(), icon.height()), (32, 32));
-        let opaque = icon
-            .rgba()
-            .chunks_exact(4)
-            .filter(|px| px[3] == 255)
-            .count();
-        assert!(opaque > 100 && opaque < 32 * 32 / 2, "{opaque}");
-    }
 }
