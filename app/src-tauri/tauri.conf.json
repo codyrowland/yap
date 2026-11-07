@@ -48,6 +48,19 @@
     ]
   },
   "bundle": {
-    "icon": []
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "target/release/sherpa-onnx-c-api.dll": "sherpa-onnx-c-api.dll",
+      "target/release/onnxruntime.dll": "onnxruntime.dll",
+      "target/release/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "windows/hooks.nsh"
+      }
+    }
   }
 }

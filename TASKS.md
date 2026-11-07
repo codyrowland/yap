@@ -2,7 +2,7 @@
 
 The product spec is **flow 2 (2a–2i)** on the Yap mockups canvas (Claude Design project "Yap", page "Hush Mockups"): onboarding, Settings (talk keys, on-device, cloud, self-hosted, general), History, recording overlay and tray popover. The older Hush round has been removed from the canvas. Mockup interactions must be backed by real app behavior; anything not yet real is shown disabled ("Coming soon").
 
-Next: Windows release items (bundle the sherpa-onnx DLLs and VC++ runtime, test clean-up with real models) → macOS port → Linux.
+Next: Windows release items. Build the installer with `app/src-tauri/windows/build-installer.ps1` (needs `cargo install tauri-cli --version "^2" --locked`): an unsigned per-user NSIS `.exe` in `target/release/bundle/nsis`. Left: test clean-up with the real models → macOS port → Linux.
 
 ## Structure
 
@@ -28,7 +28,7 @@ Decision (Nov 2026): ship four families, not ten. Whisper for breadth (99 langua
 - [x] Parakeet TDT 0.6B v3 (multilingual, recommended) and v2 (English): pinned size + SHA-256, download `.tar.bz2` from the sherpa-onnx `asr-models` release, unpack only encoder/decoder/joiner/tokens into `models/<id>/`. v3 archive layout and config checked against sherpa-onnx's Python build (en/de/fr samples transcribed correctly).
 - [x] Loaded on-device model is cached between dictations and preloaded on start and when the model changes (loading takes ~2 s).
 - [x] Settings › On-device and onboarding offer Parakeet (onboarding defaults to v3).
-- [ ] Bundle `sherpa-onnx-c-api.dll` and `onnxruntime.dll` with the installer (Tauri `bundle.resources`); `cargo tauri dev` already finds them.
+- [x] Bundle `sherpa-onnx-c-api.dll`, `onnxruntime.dll` and `onnxruntime_providers_shared.dll` next to `yap-app.exe` in the installer (Tauri `bundle.resources`).
 - [x] Parakeet v2 archive layout verified (same file names as v3).
 - [x] Moonshine v2 tiny and base (English; `encoder_model.ort` + `decoder_model_merged.ort`), offline like Parakeet.
 - [x] Nemotron streaming (560 ms chunks): Speech Streaming EN 0.6B and 3.5 ASR Streaming 0.6B (multilingual; gets the spoken-language setting as a per-stream option, "auto" by default). Audio is fed to the model while recording; partial text shows in the overlay; the final text is ready shortly after release. If the model is still loading at release, the whole recording is transcribed in one go instead.
@@ -48,7 +48,7 @@ Removes "um"s and false starts, fixes grammar and punctuation, turns spoken list
 - [x] Safety: dictations under 4 words skip clean-up; a reply much shorter or longer than the dictation (an answer instead of an edit, a truncation) is discarded; any error or 15 s+ timeout inserts the original words and says so.
 - [x] Overlay shows "Cleaning up"; history stores the cleaned text.
 - [ ] Not yet run with the real models (Hugging Face is blocked from the build sandbox): check quality and speed on Windows, tune the prompt.
-- [ ] llama-server needs the Microsoft Visual C++ Redistributable (x64); Yap reports it if missing. Ship it with the installer.
+- [x] The Microsoft Visual C++ runtime (x64, 14.50 or newer) is needed by Yap itself (whisper.cpp) and by llama-server. The installer ships `vc_redist.x64.exe` and runs it if the runtime is missing or older (`windows/hooks.nsh`; Windows asks for admin once).
 - [ ] Bullets with "Simulated typing" insertion depend on the target app handling newlines; paste works everywhere.
 
 ## Onboarding and input

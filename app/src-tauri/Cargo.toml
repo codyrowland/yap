@@ -5,7 +5,7 @@ edition = "2024"
 default-run = "yap-app"
 
 [build-dependencies]
-tauri-build = "=2.7.2"
+tauri-build = { version = "=2.7.2", features = [] }
 
 [features]
 default = ["local-whisper", "local-sherpa"]
@@ -23,6 +23,11 @@ path = "src/main.rs"
 [[bin]]
 name = "yap-test-app"
 path = "src/main.rs"
+required-features = ["input-test"]
+
+[[bin]]
+name = "input_harness"
+path = "src/bin/input_harness.rs"
 required-features = ["input-test"]
 
 [dependencies]
