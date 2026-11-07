@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Yap — system-wide voice to text for Windows.
 //!
 //! Module map:
