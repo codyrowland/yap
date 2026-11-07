@@ -10,6 +10,20 @@ use shortcut::Held;
 
 const CAPTURE_LIMIT: Duration = Duration::from_secs(60);
 
+/// Converts a shortcut saved before settings version 7 ("Ctrl+Right Alt")
+/// to W3C names ("Control+AltRight"). Names already in the new form are
+/// kept. `None` if a key has no portable name.
+pub fn migrate_shortcut(text: &str) -> Option<String> {
+    text.split('+')
+        .map(|name| {
+            Key::from_legacy_name(name)
+                .or_else(|| Key::from_name(name))?
+                .name()
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|names| names.join("+"))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TalkKey {
     Hold,
@@ -253,8 +267,25 @@ mod tests {
     }
 
     #[test]
+    fn migrates_old_shortcut_names() {
+        for (old, new) in [
+            ("Ctrl+Space", "Control+Space"),
+            ("Ctrl+Shift+Space", "Control+Shift+Space"),
+            ("Right Alt", "AltRight"),
+            ("Ctrl+Right Meta+L", "Control+MetaRight+KeyL"),
+            ("Alt+Left", "Alt+ArrowLeft"),
+            ("F8", "F8"),
+            ("Control+Shift+Space", "Control+Shift+Space"),
+        ] {
+            assert_eq!(migrate_shortcut(old).as_deref(), Some(new), "{old}");
+        }
+        assert_eq!(migrate_shortcut("Ctrl+VK-92"), None);
+        assert_eq!(migrate_shortcut(""), None);
+    }
+
+    #[test]
     fn request_stop_ends_hold_or_toggle_once_and_swallows_the_hold_key_up() {
-        let mut state = keys("F8", "Ctrl+Shift+Space");
+        let mut state = keys("F8", "Control+Shift+Space");
         assert!(!state.request_stop());
         assert_eq!(state.handle(F8, true, false), (true, Some(Event::Pressed)));
         assert!(state.request_stop());
@@ -276,7 +307,7 @@ mod tests {
 
     #[test]
     fn hold_release_cancel_and_busy_press_are_distinct() {
-        let mut state = keys("F8", "Ctrl+Shift+Space");
+        let mut state = keys("F8", "Control+Shift+Space");
         assert_eq!(state.handle(F8, true, false), (true, Some(Event::Pressed)));
         assert_eq!(state.handle(F8, true, false), (true, None));
         assert_eq!(state.handle(F8, false, true), (true, Some(Event::Released)));
@@ -292,7 +323,7 @@ mod tests {
 
     #[test]
     fn toggle_ignores_repeats_and_releases_then_stops_on_second_press() {
-        let mut state = keys("F8", "Ctrl+Shift+Space");
+        let mut state = keys("F8", "Control+Shift+Space");
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(state.handle(SHIFT, true, false), (false, None));
         assert_eq!(
@@ -310,13 +341,13 @@ mod tests {
 
     #[test]
     fn capture_swallows_nothing_and_never_activates() {
-        let mut state = keys("F8", "Ctrl+Shift+Space");
+        let mut state = keys("F8", "Control+Shift+Space");
         state.begin_capture(TalkKey::Hold).unwrap();
         assert_eq!(state.handle(RIGHT_META, true, false), (false, None));
         assert_eq!(state.handle(RIGHT_CTRL, true, false), (false, None));
         assert_eq!(state.handle(F12, true, false), (false, None));
         assert!(!state.active);
-        assert!(shortcut("Right Ctrl+Right Meta+F12").matches(F12, &state.modifiers, true));
+        assert!(shortcut("ControlRight+MetaRight+F12").matches(F12, &state.modifiers, true));
         assert!(state.begin_capture(TalkKey::Toggle).is_err());
         assert!(state.complete_capture(TalkKey::Toggle).is_err());
         state.complete_capture(TalkKey::Hold).unwrap();
@@ -325,7 +356,7 @@ mod tests {
 
     #[test]
     fn right_alt_hold_accepts_windows_synthetic_ctrl() {
-        let mut state = keys("Right Alt", "Ctrl+Shift+Space");
+        let mut state = keys("AltRight", "Control+Shift+Space");
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(
             state.handle(RIGHT_ALT, true, false),
@@ -340,7 +371,7 @@ mod tests {
 
     #[test]
     fn right_alt_hold_needs_ctrl_up_without_the_altgr_rule() {
-        let mut state = TalkKeys::new(shortcut("Right Alt"), shortcut("F9"), false);
+        let mut state = TalkKeys::new(shortcut("AltRight"), shortcut("F9"), false);
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(state.handle(RIGHT_ALT, true, false), (false, None));
     }
@@ -348,7 +379,7 @@ mod tests {
     #[test]
     fn right_alt_alone_toggles_with_or_without_windows_synthetic_ctrl() {
         for synthetic_ctrl in [false, true] {
-            let mut state = keys("Ctrl+Space", "Right Alt");
+            let mut state = keys("Control+Space", "AltRight");
             if synthetic_ctrl {
                 assert_eq!(state.handle(CTRL, true, false), (false, None));
             }
@@ -367,7 +398,7 @@ mod tests {
 
     #[test]
     fn right_alt_toggle_accepts_windows_synthetic_ctrl() {
-        let mut state = keys("Ctrl+Space", "Right Alt+Down");
+        let mut state = keys("Control+Space", "AltRight+ArrowDown");
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(state.handle(RIGHT_ALT, true, false), (false, None));
         assert_eq!(
@@ -387,7 +418,7 @@ mod tests {
 
     #[test]
     fn sequential_capture_does_not_activate_or_choose_first_key() {
-        let mut state = keys("F8", "Ctrl+Shift+Space");
+        let mut state = keys("F8", "Control+Shift+Space");
         state.begin_capture(TalkKey::Hold).unwrap();
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(state.handle(CTRL, false, true), (false, None));
@@ -396,14 +427,14 @@ mod tests {
         assert_eq!(state.capturing, Some(TalkKey::Hold));
         assert!(!state.active);
         state.cancel_capture();
-        state.set_shortcuts(shortcut("Ctrl+L"), shortcut("Ctrl+Shift+Space"));
+        state.set_shortcuts(shortcut("Control+KeyL"), shortcut("Control+Shift+Space"));
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(state.handle(L, true, false), (true, Some(Event::Pressed)));
     }
 
     #[test]
     fn hold_releases_when_modifier_released_and_suppresses_space_key_up() {
-        let mut state = keys("Ctrl+Space", "Ctrl+Shift+Space");
+        let mut state = keys("Control+Space", "Control+Shift+Space");
         assert_eq!(state.handle(CTRL, true, false), (false, None));
         assert_eq!(
             state.handle(SPACE, true, false),
@@ -419,7 +450,7 @@ mod tests {
 
     #[test]
     fn involves_only_talk_keys_modifiers_and_escape() {
-        let state = keys("F8", "Ctrl+Shift+Space");
+        let state = keys("F8", "Control+Shift+Space");
         for key in [F8, SPACE, ESCAPE, CTRL, RIGHT_ALT] {
             assert!(state.involves(key), "{key:?}");
         }

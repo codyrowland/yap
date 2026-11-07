@@ -120,16 +120,18 @@
     let saved = null;
     const say = error => { status.textContent = String(error); };
 
+    const keyText = (shortcut, separator = '+') => KeyCapture.labels(shortcut).join(separator);
+
     function setKey(button, key) {
       button.value = key;
-      button.textContent = key;
+      button.textContent = keyText(key);
     }
 
     const capture = KeyCapture.create({ onChange: renderCapture, onError: say });
     function renderCapture() {
       for (const [kind, button] of [['hold', holdKey], ['toggle', toggleKey]]) {
         const listening = capture.kind === kind;
-        button.textContent = listening ? capture.shortcut() || 'Press keys one at a time…' : button.value;
+        button.textContent = listening ? keyText(capture.shortcut()) || 'Press keys one at a time…' : keyText(button.value);
         document.getElementById(`save-${kind}-key-capture`).hidden = !listening || !capture.shortcut();
         document.getElementById(`cancel-${kind}-key-capture`).hidden = !listening;
       }
@@ -299,8 +301,8 @@
       remoteModel.value = settings.remoteModel;
       setKey(holdKey, settings.holdKey);
       setKey(toggleKey, settings.toggleKey);
-      document.getElementById('hold-label').textContent = settings.holdKey.replaceAll('+', ' ');
-      document.getElementById('toggle-label').textContent = settings.toggleKey.replaceAll('+', ' ');
+      document.getElementById('hold-label').textContent = keyText(settings.holdKey, ' ');
+      document.getElementById('toggle-label').textContent = keyText(settings.toggleKey, ' ');
       renderModels();
       showStep(0);
       checkPermissions();
@@ -329,8 +331,8 @@
         if (step === 0 && (!permissions?.microphone || !permissions?.accessibility)) throw new Error('Check both permissions before continuing.');
         if (step === 2 || step === 3) await saveSettings();
         if (step === 3) {
-          document.getElementById('hold-label').textContent = holdKey.value.replaceAll('+', ' ');
-          document.getElementById('toggle-label').textContent = toggleKey.value.replaceAll('+', ' ');
+          document.getElementById('hold-label').textContent = keyText(holdKey.value, ' ');
+          document.getElementById('toggle-label').textContent = keyText(toggleKey.value, ' ');
         }
         if (step === 3 && holdKey.value === toggleKey.value) throw new Error('Talk keys must be different.');
         if (step === 4) {

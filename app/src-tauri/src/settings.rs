@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::models::Family;
 use crate::speech::{self, SpeechConfig, cloud};
 
-pub const CURRENT_VERSION: u32 = 6;
-pub const DEFAULT_HOLD_KEY: &str = "Ctrl+Space";
-pub const DEFAULT_TOGGLE_KEY: &str = "Ctrl+Shift+Space";
+pub const CURRENT_VERSION: u32 = 7;
+pub const DEFAULT_HOLD_KEY: &str = "Control+Space";
+pub const DEFAULT_TOGGLE_KEY: &str = "Control+Shift+Space";
 
 /// Languages offered in Settings › General. `auto` lets the engine detect.
 pub const LANGUAGES: &[(&str, &str)] = &[
@@ -241,9 +241,31 @@ impl Settings {
             return Err("Settings were written by a newer version of Yap".to_owned());
         }
 
+        if settings.version < 7 {
+            settings.migrate_talk_keys();
+        }
         settings.version = CURRENT_VERSION;
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// Version 7 saves talk keys under W3C key names. Older names are
+    /// converted; if either key has no portable name, both go back to the
+    /// defaults so they cannot clash.
+    fn migrate_talk_keys(&mut self) {
+        match (
+            crate::talk_keys::migrate_shortcut(&self.hold_key),
+            crate::talk_keys::migrate_shortcut(&self.toggle_key),
+        ) {
+            (Some(hold), Some(toggle)) => {
+                self.hold_key = hold;
+                self.toggle_key = toggle;
+            }
+            _ => {
+                self.hold_key = DEFAULT_HOLD_KEY.to_owned();
+                self.toggle_key = DEFAULT_TOGGLE_KEY.to_owned();
+            }
+        }
     }
 
     /// Imports the line-based `settings.txt` written by earlier builds.
@@ -328,6 +350,7 @@ impl Settings {
         if let Some(toggle) = toggle {
             settings.toggle_key = toggle;
         }
+        settings.migrate_talk_keys();
         settings.microphone_index = field(index, "microphone_index")?
             .parse()
             .map_err(|_| "Invalid microphone setting")?;
@@ -405,6 +428,22 @@ mod tests {
     }
 
     #[test]
+    fn version_6_talk_keys_move_to_w3c_names() {
+        let settings =
+            Settings::from_json(r#"{"version":6,"holdKey":"Right Alt","toggleKey":"Ctrl+L"}"#)
+                .unwrap();
+        assert_eq!(settings.version, CURRENT_VERSION);
+        assert_eq!(settings.hold_key, "AltRight");
+        assert_eq!(settings.toggle_key, "Control+KeyL");
+        let settings =
+            Settings::from_json(r#"{"version":6,"holdKey":"VK-92","toggleKey":"F8"}"#).unwrap();
+        assert_eq!(settings.hold_key, DEFAULT_HOLD_KEY);
+        assert_eq!(settings.toggle_key, DEFAULT_TOGGLE_KEY);
+        let settings = Settings::from_json(r#"{"version":7,"holdKey":"Right Alt"}"#).unwrap();
+        assert_eq!(settings.hold_key, "Right Alt");
+    }
+
+    #[test]
     fn rejects_newer_versions_and_invalid_values() {
         assert!(Settings::from_json(r#"{"version":99}"#).is_err());
         assert!(Settings::from_json("not json").is_err());
@@ -472,7 +511,8 @@ mod tests {
         assert_eq!(settings.engine, Engine::Cloud);
         assert_eq!(settings.cloud_provider, "openai");
         assert_eq!(settings.cloud_model(), "whisper-1");
-        assert_eq!(settings.toggle_key, "Ctrl+Alt+D");
+        assert_eq!(settings.hold_key, "Control+Space");
+        assert_eq!(settings.toggle_key, "Control+Alt+KeyD");
     }
 
     #[test]

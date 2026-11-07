@@ -164,19 +164,19 @@ mod tests {
 
     #[test]
     fn parses_modifiers_and_rejects_bad_ones() {
-        let shortcut = parse("Right Ctrl+Right Meta+F12");
+        let shortcut = parse("ControlRight+MetaRight+F12");
         assert_eq!(shortcut.key(), Key::Function(12));
-        assert_eq!(parse("L").key(), Key::Letter('L'));
-        assert!(Shortcut::parse("Space+Ctrl").is_err());
-        assert!(Shortcut::parse("Ctrl+Right Ctrl+Space").is_err());
-        assert!(Shortcut::parse("Ctrl+Ctrl").is_err());
-        assert!(Shortcut::parse("Ctrl+").is_err());
+        assert_eq!(parse("KeyL").key(), Key::Letter('L'));
+        assert!(Shortcut::parse("Space+Control").is_err());
+        assert!(Shortcut::parse("Control+ControlRight+Space").is_err());
+        assert!(Shortcut::parse("Control+Control").is_err());
+        assert!(Shortcut::parse("Control+").is_err());
         assert!(Shortcut::parse("").is_err());
     }
 
     #[test]
     fn right_modifiers_need_the_right_key() {
-        let shortcut = parse("Right Ctrl+Right Meta+F12");
+        let shortcut = parse("ControlRight+MetaRight+F12");
         let mut held = Held::default();
         held.set(Key::Modifier(Modifier::Meta, Side::Right), true);
         held.set(Key::Modifier(Modifier::Ctrl, Side::Right), true);
@@ -189,32 +189,32 @@ mod tests {
 
     #[test]
     fn left_modifier_key_stands_for_either_side() {
-        let shortcut = parse("Ctrl");
+        let shortcut = parse("Control");
         assert!(shortcut.key_matches(Key::Modifier(Modifier::Ctrl, Side::Left)));
         assert!(shortcut.key_matches(Key::Modifier(Modifier::Ctrl, Side::Right)));
-        let right = parse("Right Ctrl");
+        let right = parse("ControlRight");
         assert!(!right.key_matches(Key::Modifier(Modifier::Ctrl, Side::Left)));
     }
 
     #[test]
     fn uses_matches_reserved_patterns_on_either_side() {
-        assert!(parse("Meta+L").uses(&[Modifier::Meta], Key::Letter('L')));
-        assert!(parse("Right Meta+L").uses(&[Modifier::Meta], Key::Letter('L')));
-        assert!(parse("Ctrl+Alt+Delete").uses(&[Modifier::Ctrl, Modifier::Alt], Key::Delete));
-        assert!(!parse("Ctrl+Delete").uses(&[Modifier::Ctrl, Modifier::Alt], Key::Delete));
-        assert!(!parse("L").uses(&[Modifier::Meta], Key::Letter('L')));
+        assert!(parse("Meta+KeyL").uses(&[Modifier::Meta], Key::Letter('L')));
+        assert!(parse("MetaRight+KeyL").uses(&[Modifier::Meta], Key::Letter('L')));
+        assert!(parse("Control+Alt+Delete").uses(&[Modifier::Ctrl, Modifier::Alt], Key::Delete));
+        assert!(!parse("Control+Delete").uses(&[Modifier::Ctrl, Modifier::Alt], Key::Delete));
+        assert!(!parse("KeyL").uses(&[Modifier::Meta], Key::Letter('L')));
     }
 
     #[test]
     fn pairs_that_one_press_triggers_together_conflict() {
         let check = |hold: &str, toggle: &str| check_pair(parse(hold), parse(toggle), true);
-        assert!(check("Ctrl+Space", "Ctrl+Space").is_err());
-        assert!(check("Ctrl", "Ctrl+Space").is_err());
-        assert!(check("Right Alt", "Ctrl+Right Alt").is_err());
-        assert!(check("Right Alt+Down", "Ctrl+Right Alt+Down").is_err());
-        assert!(check("Ctrl", "Right Ctrl").is_err());
-        assert!(check("Ctrl+Space", "Right Alt").is_ok());
-        assert!(check("Ctrl+Space", "Ctrl+Shift+Space").is_ok());
+        assert!(check("Control+Space", "Control+Space").is_err());
+        assert!(check("Control", "Control+Space").is_err());
+        assert!(check("AltRight", "Control+AltRight").is_err());
+        assert!(check("AltRight+ArrowDown", "Control+AltRight+ArrowDown").is_err());
+        assert!(check("Control", "ControlRight").is_err());
+        assert!(check("Control+Space", "AltRight").is_ok());
+        assert!(check("Control+Space", "Control+Shift+Space").is_ok());
         assert!(check("F8", "F9").is_ok());
     }
 }

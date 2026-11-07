@@ -64,16 +64,23 @@ fn key_from_vk(vk: u32) -> Key {
         0xDC => Key::Backslash,
         0xDD => Key::RightBracket,
         0xDE => Key::Quote,
+        0xE2 => Key::IntlBackslash,
+        0x14 => Key::CapsLock,
+        0x90 => Key::NumLock,
+        0x91 => Key::ScrollLock,
+        0x13 => Key::Pause,
+        0x5D => Key::ContextMenu,
+        0x6B => Key::NumpadAdd,
+        0x6D => Key::NumpadSubtract,
+        0x6A => Key::NumpadMultiply,
+        0x6F => Key::NumpadDivide,
+        0x6E => Key::NumpadDecimal,
         0x30..=0x39 => Key::Digit((vk - 0x30) as u8),
         0x41..=0x5A => Key::Letter(char::from(vk as u8)),
         0x70..=0x87 => Key::Function((vk - 0x6F) as u8),
         0x60..=0x69 => Key::Numpad((vk - 0x60) as u8),
         _ => Key::Native(vk),
     }
-}
-
-pub fn native_key_known(code: u32) -> bool {
-    code != 0 && code != 0xFF && key_from_vk(code) == Key::Native(code)
 }
 
 static ACCEPT_INJECTED: AtomicBool = AtomicBool::new(false);
@@ -296,37 +303,25 @@ mod tests {
     use yap_app::talk_keys::Shortcut;
 
     #[test]
-    fn named_keys_are_never_native() {
-        for vk in 1..0xFF {
-            if let Key::Native(code) = key_from_vk(vk) {
-                assert_eq!(code, vk);
-                assert!(native_key_known(vk));
-            } else {
-                assert!(!native_key_known(vk), "0x{vk:02X}");
-            }
-        }
-        assert!(!native_key_known(0));
-        assert!(!native_key_known(0xFF));
-    }
-
-    #[test]
-    fn named_keys_keep_their_saved_names() {
+    fn virtual_keys_map_to_w3c_names() {
         for (vk, name) in [
-            (0xA5, "Right Alt"),
-            (CONTROL, "Ctrl"),
-            (0xA2, "Ctrl"),
+            (0xA5, "AltRight"),
+            (CONTROL, "Control"),
+            (0xA2, "Control"),
             (0x5B, "Meta"),
             (0x20, "Space"),
-            (0x4C, "L"),
-            (0x37, "7"),
+            (0x4C, "KeyL"),
+            (0x37, "Digit7"),
             (0x77, "F8"),
             (0x63, "Numpad3"),
             (0xDE, "Quote"),
-            (0x92, "VK-92"),
+            (0x14, "CapsLock"),
+            (0x6B, "NumpadAdd"),
         ] {
             assert_eq!(key_from_vk(vk).name().as_deref(), Some(name));
         }
         assert_eq!(key_from_vk(0x1B), Key::Escape);
+        assert_eq!(key_from_vk(0x92), Key::Native(0x92));
     }
 
     #[test]
@@ -337,11 +332,11 @@ mod tests {
                 .iter()
                 .any(|(modifiers, key)| shortcut.uses(modifiers, *key))
         };
-        assert!(reserved("Meta+L"));
-        assert!(reserved("Right Meta+L"));
-        assert!(reserved("Ctrl+Alt+Delete"));
-        assert!(reserved("Right Ctrl+Alt+Shift+Delete"));
-        assert!(!reserved("Ctrl+L"));
-        assert!(!reserved("Ctrl+Delete"));
+        assert!(reserved("Meta+KeyL"));
+        assert!(reserved("MetaRight+KeyL"));
+        assert!(reserved("Control+Alt+Delete"));
+        assert!(reserved("ControlRight+Alt+Shift+Delete"));
+        assert!(!reserved("Control+KeyL"));
+        assert!(!reserved("Control+Delete"));
     }
 }

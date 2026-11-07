@@ -235,7 +235,7 @@
     const capture = KeyCapture.create({ onChange: () => renderKeys(), onError: say });
     const keyOf = kind => kind === 'hold' ? settings.holdKey : settings.toggleKey;
     function keycaps(shortcut) {
-      return shortcut.split('+').map(part => { const cap = document.createElement('span'); cap.className = 'keycap'; cap.textContent = part; return cap; });
+      return KeyCapture.labels(shortcut).map(part => { const cap = document.createElement('span'); cap.className = 'keycap'; cap.textContent = part; return cap; });
     }
     function renderKeys() {
       const same = settings.holdKey === settings.toggleKey;
@@ -274,7 +274,7 @@
     }
     $('reset-keys').onclick = async () => {
       await capture.cancel().catch(say);
-      save({ holdKey: 'Ctrl+Space', toggleKey: 'Ctrl+Shift+Space' });
+      save({ holdKey: 'Control+Space', toggleKey: 'Control+Shift+Space' });
     };
 
     // ---------- 2f general ----------

@@ -25,12 +25,6 @@ static SENDER: OnceLock<mpsc::Sender<Event>> = OnceLock::new();
 
 fn parse(text: &str) -> Result<Shortcut, String> {
     let shortcut = Shortcut::parse(text)?;
-    if let Key::Native(code) = shortcut.key()
-        && !keyboard_hook::native_key_known(code)
-    {
-        return Err("Unsupported shortcut".to_owned());
-    }
-
     if keyboard_hook::RESERVED_SHORTCUTS
         .iter()
         .any(|(modifiers, key)| shortcut.uses(modifiers, *key))
@@ -162,16 +156,15 @@ mod tests {
 
     #[test]
     fn validate_rejects_reserved_unknown_and_conflicting_keys() {
-        assert!(validate("Right Alt", "Ctrl+Shift+Space").is_ok());
-        assert!(validate("VK-92", "F8").is_ok());
+        assert!(validate("AltRight", "Control+Shift+Space").is_ok());
         assert_eq!(
-            validate("Meta+L", "F8"),
+            validate("Meta+KeyL", "F8"),
             Err(keyboard_hook::RESERVED_MESSAGE.to_owned())
         );
-        assert!(validate("F8", "Ctrl+Alt+Delete").is_err());
-        assert!(validate("VK-41", "F8").is_err());
-        assert!(validate("VK-1B", "F8").is_err());
-        assert!(validate("Ctrl+Space", "Ctrl+Space").is_err());
-        assert!(validate("Right Alt", "Ctrl+Right Alt").is_err());
+        assert!(validate("F8", "Control+Alt+Delete").is_err());
+        assert!(validate("VK-92", "F8").is_err());
+        assert!(validate("Ctrl+Space", "F8").is_err());
+        assert!(validate("Control+Space", "Control+Space").is_err());
+        assert!(validate("AltRight", "Control+AltRight").is_err());
     }
 }

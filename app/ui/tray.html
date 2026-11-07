@@ -44,6 +44,7 @@
       <button class="btn" type="button" id="quit">Quit Yap</button>
     </div>
   </div>
+  <script src="keys.js"></script>
   <script>
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
@@ -52,7 +53,7 @@
     function caps(shortcut) {
       const wrap = document.createElement('span');
       wrap.style.cssText = 'display:inline-flex;gap:6px';
-      for (const part of shortcut.split('+')) {
+      for (const part of KeyCapture.labels(shortcut)) {
         const cap = document.createElement('span');
         cap.className = 'keycap keycap-small';
         cap.textContent = part;
