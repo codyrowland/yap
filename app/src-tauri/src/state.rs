@@ -8,6 +8,7 @@ use yap_app::settings::Settings;
 
 use crate::audio;
 use crate::platform::Destination;
+use crate::speakers::Muted;
 
 /// Where a dictation's text goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub enum Target {
 
 pub struct Session {
     pub capture: Option<audio::Capture>,
+    pub muted: Option<Muted>,
     pub coordinator: Coordinator<Option<Target>>,
 }
 
@@ -30,6 +32,7 @@ impl Session {
     pub fn new() -> Self {
         Self {
             capture: None,
+            muted: None,
             coordinator: Coordinator::default(),
         }
     }
@@ -40,6 +43,7 @@ impl Session {
 
     pub fn stop_for_exit(&mut self) -> Option<audio::Capture> {
         self.coordinator.shutdown();
+        self.muted = None;
         self.capture.take()
     }
 }

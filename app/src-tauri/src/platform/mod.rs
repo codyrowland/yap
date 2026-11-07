@@ -65,6 +65,14 @@ pub fn accessibility_ready() -> bool {
     imp::input::accessibility_ready()
 }
 
+pub fn mute_speakers() -> Option<String> {
+    imp::speakers::mute()
+}
+
+pub fn unmute_speakers(device: &str) {
+    imp::speakers::unmute(device);
+}
+
 pub fn credential_store() -> &'static dyn CredentialStore {
     &imp::credentials::CredentialManager
 }

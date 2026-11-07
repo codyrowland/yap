@@ -70,6 +70,7 @@ pub struct Settings {
     pub language: String,
     pub show_overlay: bool,
     pub open_at_login: bool,
+    pub mute_while_recording: bool,
     /// Tidy each transcript with a local language model before inserting.
     pub cleanup_enabled: bool,
     /// Which clean-up model (`cleanup::MODELS`).
@@ -96,6 +97,7 @@ impl Default for Settings {
             language: "auto".to_owned(),
             show_overlay: true,
             open_at_login: false,
+            mute_while_recording: true,
             cleanup_enabled: false,
             cleanup_model: "qwen3.5-2b".to_owned(),
         }
@@ -423,6 +425,7 @@ mod tests {
         assert_eq!(settings.toggle_key, DEFAULT_TOGGLE_KEY);
         assert_eq!(settings.insertion, Insertion::Paste);
         assert!(settings.show_overlay);
+        assert!(settings.mute_while_recording);
         assert!(!settings.cleanup_enabled);
         assert_eq!(settings.cleanup_model, "qwen3.5-2b");
     }

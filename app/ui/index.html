@@ -81,6 +81,10 @@
               <div class="what"><strong>Show recording overlay</strong><span>A small bar at the bottom of the screen while listening.</span></div>
               <button type="button" class="switch" role="switch" id="show-overlay" aria-label="Show recording overlay"><span></span></button>
             </div>
+            <div class="setting-row">
+              <div class="what"><strong>Mute sound while recording</strong><span>Silences your speakers while you talk, then turns them back on.</span></div>
+              <button type="button" class="switch" role="switch" id="mute-while-recording" aria-label="Mute sound while recording"><span></span></button>
+            </div>
             <div class="setting-row top">
               <div class="what"><strong>Insert text by</strong><span>Pasting is instant; typing works in apps that block paste. If the clipboard holds an image or files, Yap types instead so nothing is lost.</span></div>
               <div class="control">
@@ -352,12 +356,14 @@
       $('microphone').value = String(settings.microphoneIndex);
       $('open-at-login').setAttribute('aria-checked', String(settings.openAtLogin));
       $('show-overlay').setAttribute('aria-checked', String(settings.showOverlay));
+      $('mute-while-recording').setAttribute('aria-checked', String(settings.muteWhileRecording));
       for (const radio of document.querySelectorAll('[name="insertion"]')) radio.checked = radio.value === settings.insertion;
       $('language').value = settings.language;
     }
     $('microphone').onchange = event => save({ microphoneIndex: Number(event.target.value) });
     $('open-at-login').onclick = () => save({ openAtLogin: !settings.openAtLogin });
     $('show-overlay').onclick = () => save({ showOverlay: !settings.showOverlay });
+    $('mute-while-recording').onclick = () => save({ muteWhileRecording: !settings.muteWhileRecording });
     for (const radio of document.querySelectorAll('[name="insertion"]')) radio.onchange = () => save({ insertion: radio.value });
     $('language').onchange = event => save({ language: event.target.value });
 

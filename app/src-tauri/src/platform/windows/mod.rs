@@ -5,4 +5,5 @@ pub mod field_watch;
 pub mod helper_process;
 pub mod input;
 pub mod keyboard_hook;
+pub mod speakers;
 pub mod window;

@@ -26,6 +26,7 @@ mod onboarding;
 mod overlay;
 mod own_window;
 mod platform;
+mod speakers;
 mod state;
 mod talk_key_state;
 mod tray;
@@ -121,6 +122,7 @@ fn main() {
         ])
         .setup(|app| {
             logfile::init(app.path().app_data_dir()?.join("yap.log"));
+            speakers::restore_after_crash(app.handle());
             tray::install(app)?;
             let history_path = app.path().app_data_dir()?.join("history.json");
             app.manage(Mutex::new(

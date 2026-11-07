@@ -80,6 +80,10 @@ pub fn begin_recording(
     };
     let tap = capture.tap();
     session.capture = Some(capture);
+    if settings.mute_while_recording {
+        session.muted = crate::speakers::mute(app);
+    }
+
     drop(session);
     overlay::track_recording(app, id);
     if let Some((speech, language)) = streaming {
@@ -113,7 +117,7 @@ pub async fn stop_recording(
     expected: u64,
 ) -> Result<String, String> {
     let session = Arc::clone(session.inner());
-    let (id, capture, cancelled, cleanup) = {
+    let (id, capture, muted, cancelled, cleanup) = {
         let mut session = lock(&session)?;
         let id = session
             .coordinator
@@ -128,8 +132,9 @@ pub async fn stop_recording(
             .ok_or("No recording is active")?;
         let capture = session.capture.take().ok_or("No recording is active")?;
         let cleanup = app.state::<SharedSettings>().get().cleanup_enabled;
-        (id, capture, cancelled, cleanup)
+        (id, capture, session.muted.take(), cancelled, cleanup)
     };
+    drop(muted);
     let recording = capture.stop();
     // A recording that hit the length limit is still transcribed: the limit
     // ends it, like releasing the key.
@@ -225,7 +230,9 @@ pub fn cancel_recording(session: &SessionState, app: &AppHandle) -> Result<(), S
     let mut session = lock(session)?;
     session.coordinator.cancel_current();
     session.capture = None;
+    let muted = session.muted.take();
     drop(session);
+    drop(muted);
     lock(app.state::<Arc<Mutex<FieldWatch>>>().inner())?.cancel();
     Ok(())
 }
