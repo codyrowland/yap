@@ -99,4 +99,4 @@ The installer ends up in `app/src-tauri/target/release/bundle/nsis/`.
 
 ## Where it's at
 
-Yap is in early testing, so expect some rough edges. If something breaks or you have an idea, open an issue. [TASKS.md](TASKS.md) has what's done and what's next.
+Yap is in early testing, so expect some rough edges. If something breaks or you have an idea, open an issue.
