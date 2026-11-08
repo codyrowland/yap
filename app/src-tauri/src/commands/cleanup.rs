@@ -88,6 +88,7 @@ pub fn download_cleanup(
             Err(error) if error == "Cancelled" => ("cancelled", None),
             Err(error) => ("error", Some(error)),
         };
+        super::models::log_download(&event_id, state, error.as_deref());
         if let Ok(mut active) = downloads.lock() {
             *active = None;
         }

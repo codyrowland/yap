@@ -60,6 +60,18 @@ pub(super) struct ModelProgress {
     pub error: Option<String>,
 }
 
+/// Logs how a download ended. Errors from the HTTP client can end with the
+/// download URL, which may carry a signed token, so that part is dropped.
+pub(super) fn log_download(id: &str, state: &str, error: Option<&str>) {
+    match error {
+        Some(error) => {
+            let error = error.split(" for url ").next().unwrap_or_default();
+            crate::logfile::write(&format!("download {id}: {state}: {error}"));
+        }
+        None => crate::logfile::write(&format!("download {id}: {state}")),
+    }
+}
+
 #[tauri::command]
 pub fn download_model(
     id: String,
@@ -105,6 +117,7 @@ pub fn download_model(
             Err(error) if error == "Cancelled" => ("cancelled", None),
             Err(error) => ("error", Some(error)),
         };
+        log_download(&id, state, error.as_deref());
         if let Ok(mut active) = downloads.lock() {
             *active = None;
         }
