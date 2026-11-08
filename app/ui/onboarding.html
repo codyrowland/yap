@@ -25,7 +25,7 @@
             <h2>Two permissions</h2>
             <p>Yap listens only while you dictate, then inserts text into the app you're using.</p>
             <div class="row"><span>Microphone<br><small>To hear you while recording.</small></span><strong id="mic-state">Checking…</strong></div>
-            <div class="row"><span>Accessibility<br><small>Windows does not require a separate grant. Yap checks that UI Automation is available.</small></span><strong id="access-state">Checking…</strong></div>
+            <div class="row"><span>Accessibility<br><small id="access-hint">Windows does not require a separate grant. Yap checks that UI Automation is available.</small></span><strong id="access-state">Checking…</strong></div>
             <label class="field" for="microphone">Microphone</label>
             <select id="microphone" class="input"></select>
             <button id="check-permissions" type="button" class="btn btn-secondary">Check again</button>
@@ -115,6 +115,9 @@
     let step = 0;
     let reached = 0;
     let permissions = null;
+    const mac = /Mac/.test(navigator.userAgent);
+    const accessMissing = mac ? 'Turn on Yap in System Settings › Privacy & Security › Accessibility, then check again.' : 'Windows UI Automation could not start.';
+    if (mac) document.getElementById('access-hint').textContent = 'To hear your talk keys and type into other apps.';
     let models = [];
     let selectedModel = 'parakeet-tdt-0.6b-v3';
     let saved = null;
@@ -186,7 +189,7 @@
         permissions = await invoke('onboarding_permissions', { index: Number(microphone.value) });
         document.getElementById('mic-state').textContent = permissions.microphone ? 'Ready' : 'Unavailable';
         document.getElementById('access-state').textContent = permissions.accessibility ? 'Ready' : 'Unavailable';
-        document.getElementById('permission-error').textContent = permissions.microphoneError || (permissions.accessibility ? '' : 'Windows UI Automation could not start.');
+        document.getElementById('permission-error').textContent = permissions.microphoneError || (permissions.accessibility ? '' : accessMissing);
       } catch (error) {
         status.textContent = String(error);
       }

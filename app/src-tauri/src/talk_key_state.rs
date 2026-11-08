@@ -12,6 +12,7 @@ pub enum Event {
     Cancelled,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct KeyOutcome {
     pub suppress: bool,
     pub event: Option<Event>,

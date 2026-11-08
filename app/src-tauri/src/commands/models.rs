@@ -175,7 +175,7 @@ pub fn delete_model(
 pub fn open_models_folder(app: AppHandle) -> Result<(), String> {
     let directory = config::models_path(&app)?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    std::process::Command::new("explorer.exe")
+    std::process::Command::new(crate::platform::FILE_MANAGER)
         .arg(directory)
         .spawn()
         .map(drop)

@@ -1,7 +1,11 @@
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 mod windows;
+#[cfg(target_os = "macos")]
+use macos as imp;
 #[cfg(windows)]
 use windows as imp;
 
@@ -10,6 +14,7 @@ use std::process::ExitStatus;
 use tauri::WebviewWindow;
 use yap_app::credential_store::CredentialStore;
 
+pub use imp::FILE_MANAGER;
 pub use imp::field_watch::FieldWatch;
 pub use imp::helper_process::HelperProcess;
 pub use imp::input::Destination;
@@ -74,7 +79,7 @@ pub fn unmute_speakers(device: &str) {
 }
 
 pub fn credential_store() -> &'static dyn CredentialStore {
-    &imp::credentials::CredentialManager
+    imp::credentials::store()
 }
 
 pub fn set_open_at_login(enabled: bool) -> Result<(), String> {

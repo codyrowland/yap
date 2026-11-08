@@ -48,6 +48,10 @@ pub fn download_cleanup(
     app: AppHandle,
     downloads: State<'_, ModelDownloadState>,
 ) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("Clean-up is not available on this system yet".to_owned());
+    }
+
     let model = yap_app::cleanup::model(&id).ok_or("Unknown clean-up model")?;
     let directory = config::models_path(&app)?;
     let event_id = format!("cleanup:{id}");

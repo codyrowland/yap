@@ -44,6 +44,16 @@ tauri = { version = "=2.12.3", features = ["tray-icon"] }
 whisper-rs = { version = "=0.16.0", optional = true }
 zip = { version = "=2.6.1", default-features = false, features = ["deflate"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "libc", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
+objc2-application-services = { version = "=0.3.2", default-features = false, features = ["std", "libc", "AXError", "AXUIElement", "HIServices"] }
+objc2-core-audio = { version = "=0.3.2", default-features = false, features = ["std", "AudioHardware"] }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFDate", "CFDictionary", "CFMachPort", "CFNumber", "CFRunLoop", "CFString"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSString"] }
+security-framework = "=3.7.0"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Accessibility"] }

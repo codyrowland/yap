@@ -102,8 +102,26 @@ impl Tap {
     }
 }
 
+/// The cpal stream lives on its own thread: on macOS it cannot move between
+/// threads, and the session that owns the capture is shared.
+struct Running {
+    stop: mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+type Opened = (Stream, Arc<Mutex<AudioBuffer>>, mpsc::Receiver<String>, u32);
+
 pub struct Capture {
-    stream: Option<Stream>,
+    stream: Option<Running>,
     buffer: Arc<Mutex<AudioBuffer>>,
     errors: mpsc::Receiver<String>,
     sample_rate: u32,
@@ -181,6 +199,33 @@ impl Capture {
     }
 
     fn start(index: usize) -> Result<Self, String> {
+        let (ready, opened) = mpsc::channel();
+        let (stop, stopped) = mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || match Self::open(index) {
+            Ok((stream, buffer, errors, sample_rate)) => {
+                let _ = ready.send(Ok((buffer, errors, sample_rate)));
+                let _ = stopped.recv();
+                drop(stream);
+            }
+            Err(error) => {
+                let _ = ready.send(Err(error));
+            }
+        });
+        let (buffer, errors, sample_rate) = opened
+            .recv()
+            .map_err(|_| "Microphone stopped unexpectedly".to_owned())??;
+        Ok(Self {
+            stream: Some(Running {
+                stop,
+                thread: Some(thread),
+            }),
+            buffer,
+            errors,
+            sample_rate,
+        })
+    }
+
+    fn open(index: usize) -> Result<Opened, String> {
         let device = cpal::default_host()
             .input_devices()
             .map_err(|error| error.to_string())?
@@ -219,12 +264,7 @@ impl Capture {
             _ => return Err("Unsupported microphone sample format".to_owned()),
         }?;
         stream.play().map_err(|error| error.to_string())?;
-        Ok(Self {
-            stream: Some(stream),
-            buffer,
-            errors: error_receiver,
-            sample_rate: config.sample_rate.0,
-        })
+        Ok((stream, buffer, error_receiver, config.sample_rate.0))
     }
 
     pub fn tap(&self) -> Tap {

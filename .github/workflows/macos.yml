@@ -1,0 +1,33 @@
+name: macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Yap.app
+        working-directory: app/src-tauri
+        run: npx --yes @tauri-apps/cli@2.12.4 build --bundles app
+
+      - name: Zip
+        working-directory: app/src-tauri/target/release/bundle/macos
+        run: ditto -c -k --keepParent Yap.app Yap-macos-${{ matrix.arch }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yap-macos-${{ matrix.arch }}
+          path: app/src-tauri/target/release/bundle/macos/Yap-macos-${{ matrix.arch }}.zip

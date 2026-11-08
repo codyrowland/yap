@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "targets": ["app"],
+    "macOS": {
+      "frameworks": [
+        "target/release/libsherpa-onnx-c-api.dylib",
+        "target/release/libonnxruntime.dylib"
+      ],
+      "signingIdentity": "-"
+    }
+  }
+}

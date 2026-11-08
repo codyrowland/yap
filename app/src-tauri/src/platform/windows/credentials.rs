@@ -11,6 +11,10 @@ use yap_app::credential_store::CredentialStore;
 
 pub struct CredentialManager;
 
+pub fn store() -> &'static dyn CredentialStore {
+    &CredentialManager
+}
+
 fn target_name(target: &str) -> Result<Vec<u16>, String> {
     if target.is_empty() || target.contains('\0') {
         return Err("Invalid credential target".to_owned());

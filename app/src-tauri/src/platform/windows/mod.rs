@@ -7,3 +7,5 @@ pub mod input;
 pub mod keyboard_hook;
 pub mod speakers;
 pub mod window;
+
+pub const FILE_MANAGER: &str = "explorer.exe";
