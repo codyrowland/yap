@@ -6,7 +6,8 @@
         "target/release/libsherpa-onnx-c-api.dylib",
         "target/release/libonnxruntime.dylib"
       ],
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
     }
   }
 }
