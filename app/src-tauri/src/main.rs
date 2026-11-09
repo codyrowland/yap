@@ -142,6 +142,9 @@ fn main() {
             dictation::preload(app.handle(), &settings);
             assistant::sync(app.handle(), &settings);
             app.state::<SharedSettings>().set(settings);
+            for window in app.config().app.windows.clone() {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?.build()?;
+            }
 
             let (hook, events) =
                 talk_key_state::start(&hold_key, &toggle_key).map_err(std::io::Error::other)?;
