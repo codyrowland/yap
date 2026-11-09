@@ -77,6 +77,8 @@ pub struct Settings {
     pub insertion: Insertion,
     pub language: String,
     pub show_overlay: bool,
+    /// Only the sound waves while recording; errors still show.
+    pub minimal_overlay: bool,
     pub open_at_login: bool,
     pub mute_while_recording: bool,
     /// Tidy each transcript with a local language model before inserting.
@@ -105,6 +107,7 @@ impl Default for Settings {
             insertion: Insertion::Paste,
             language: "auto".to_owned(),
             show_overlay: true,
+            minimal_overlay: false,
             open_at_login: false,
             mute_while_recording: true,
             cleanup_enabled: false,
@@ -435,6 +438,7 @@ mod tests {
         assert_eq!(settings.toggle_key, DEFAULT_TOGGLE_KEY);
         assert_eq!(settings.insertion, Insertion::Paste);
         assert!(settings.show_overlay);
+        assert!(!settings.minimal_overlay);
         assert!(settings.mute_while_recording);
         assert!(!settings.cleanup_enabled);
         assert_eq!(settings.cleanup_model, "qwen3.5-2b");

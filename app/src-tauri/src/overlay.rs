@@ -23,6 +23,7 @@ pub enum Overlay {
     Recording {
         toggle: bool,
         keys: String,
+        minimal: bool,
     },
     #[serde(rename_all = "camelCase")]
     Transcribing {
@@ -45,6 +46,10 @@ pub enum Overlay {
 
 fn enabled(app: &AppHandle) -> bool {
     app.state::<SharedSettings>().get().show_overlay
+}
+
+fn minimal(app: &AppHandle) -> bool {
+    app.state::<SharedSettings>().get().minimal_overlay
 }
 
 /// Bottom-centre of the monitor the user is working on (the one under the
@@ -71,7 +76,11 @@ pub fn show(app: &AppHandle, state: Overlay) {
     let Some(window) = app.get_webview_window(LABEL) else {
         return;
     };
-    if matches!(state, Overlay::Hidden) || !enabled(app) {
+    let hidden_when_minimal = matches!(
+        state,
+        Overlay::Transcribing { .. } | Overlay::Polishing | Overlay::Done { .. }
+    );
+    if matches!(state, Overlay::Hidden) || !enabled(app) || (hidden_when_minimal && minimal(app)) {
         platform::set_visible_without_focus(&window, false);
         let _ = app.emit_to(LABEL, "overlay-state", Overlay::Hidden);
         return;
@@ -113,7 +122,7 @@ pub fn give_back_focus(app: &AppHandle) {
 
 /// Live text from a streaming engine while recording.
 pub fn partial(app: &AppHandle, text: &str) {
-    if enabled(app) {
+    if enabled(app) && !minimal(app) {
         let _ = app.emit_to(LABEL, "overlay-partial", text);
     }
 }
@@ -158,6 +167,7 @@ pub fn track_recording(app: &AppHandle, id: u64) {
         Overlay::Recording {
             toggle,
             keys: if toggle { toggle_key } else { hold_key },
+            minimal: settings.minimal_overlay,
         },
     );
     let app = app.clone();

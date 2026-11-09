@@ -89,6 +89,10 @@
               <button type="button" class="switch" role="switch" id="show-overlay" aria-label="Show recording overlay"><span></span></button>
             </div>
             <div class="setting-row">
+              <div class="what"><strong>Minimal overlay</strong><span>Only the sound waves while you talk. Errors still show.</span></div>
+              <button type="button" class="switch" role="switch" id="minimal-overlay" aria-label="Minimal overlay"><span></span></button>
+            </div>
+            <div class="setting-row">
               <div class="what"><strong>Mute sound while recording</strong><span>Silences your speakers while you talk, then turns them back on.</span></div>
               <button type="button" class="switch" role="switch" id="mute-while-recording" aria-label="Mute sound while recording"><span></span></button>
             </div>
@@ -381,6 +385,8 @@
       $('microphone').value = String(settings.microphoneIndex);
       $('open-at-login').setAttribute('aria-checked', String(settings.openAtLogin));
       $('show-overlay').setAttribute('aria-checked', String(settings.showOverlay));
+      $('minimal-overlay').setAttribute('aria-checked', String(settings.minimalOverlay));
+      $('minimal-overlay').disabled = !settings.showOverlay;
       $('mute-while-recording').setAttribute('aria-checked', String(settings.muteWhileRecording));
       for (const radio of document.querySelectorAll('[name="insertion"]')) radio.checked = radio.value === settings.insertion;
       for (const radio of document.querySelectorAll('[name="theme"]')) radio.checked = radio.value === settings.theme;
@@ -389,6 +395,7 @@
     $('microphone').onchange = event => save({ microphoneIndex: Number(event.target.value) });
     $('open-at-login').onclick = () => save({ openAtLogin: !settings.openAtLogin });
     $('show-overlay').onclick = () => save({ showOverlay: !settings.showOverlay });
+    $('minimal-overlay').onclick = () => save({ minimalOverlay: !settings.minimalOverlay });
     $('mute-while-recording').onclick = () => save({ muteWhileRecording: !settings.muteWhileRecording });
     for (const radio of document.querySelectorAll('[name="insertion"]')) radio.onchange = () => save({ insertion: radio.value });
     for (const radio of document.querySelectorAll('[name="theme"]')) radio.onchange = () => save({ theme: radio.value });

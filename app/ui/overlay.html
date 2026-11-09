@@ -10,6 +10,7 @@
     .bar { width: 100vw; height: 100vh; position: relative; display: flex; align-items: center; gap: 14px; padding: 0 10px 0 20px;
       background: var(--color-text); color: var(--color-bg); border-radius: 999px; overflow: hidden; user-select: none; }
     .bar.error { background: var(--color-accent); color: var(--color-on-accent); }
+    .bar.minimal { width: fit-content; margin: 0 auto; padding: 0 20px; }
     .rec { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--color-accent);
       box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 25%, transparent); animation: blink 1.4s ease-in-out infinite; }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
@@ -69,7 +70,7 @@
     }
 
     function renderRecordingLabel() {
-      if (!recording) return;
+      if (!recording || recording.minimal) return;
       const live = partial.length > 0;
       // Live text needs the room the level meter would use.
       show(['wave'], !live);
@@ -92,6 +93,9 @@
       clearInterval(ticker);
       show(all, false);
       $('bar').classList.toggle('error', state.state === 'error');
+      const minimal = state.state === 'recording' && state.minimal;
+      $('bar').classList.toggle('minimal', minimal);
+      $('label').hidden = minimal;
       $('detail').textContent = '';
       recording = state.state === 'recording' ? state : null;
       $('label').style.fontWeight = '600';
@@ -100,6 +104,10 @@
         started = Date.now();
         levels.fill(0);
         partial = '';
+        if (minimal) {
+          show(['wave'], true);
+          return;
+        }
         show(['rec', 'wave', 'time'], true);
         renderRecordingLabel();
         show(['stop'], state.toggle);
