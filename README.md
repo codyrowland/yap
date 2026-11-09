@@ -4,6 +4,8 @@ Hold a key, talk, let go. Your words show up wherever your cursor is: an email, 
 
 Out of the many tools that are made for productivity, voice typing has been one that has stuck with me in my workflow. However, most options want an account, a subscription and your audio on their servers.
 
+![Yap app](assets/screenshots/yap-app.png)
+
 ## Your voice is yours
 
 What you say can be private: messages, notes, work you can't share. So Yap leaves the choice of where your audio goes to you, and the default is that it goes nowhere.
