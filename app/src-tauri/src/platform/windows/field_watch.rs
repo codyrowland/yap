@@ -5,7 +5,8 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, UIA_EditControlTypeId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationValuePattern,
+    UIA_ComboBoxControlTypeId, UIA_EditControlTypeId, UIA_TextControlTypeId, UIA_ValuePatternId,
 };
 
 use super::input::{Destination, focused_destination};
@@ -21,6 +22,7 @@ fn same_element(automation: &IUIAutomation, original: &IUIAutomationElement) -> 
 }
 
 /// The focused UI Automation element, if it is a non-password edit field
+/// (a terminal's text area or an editable combo box such as a search box)
 /// that has keyboard focus. The error says what was found instead.
 fn focused_edit(automation: &IUIAutomation) -> Result<IUIAutomationElement, String> {
     unsafe {
@@ -30,7 +32,12 @@ fn focused_edit(automation: &IUIAutomation) -> Result<IUIAutomationElement, Stri
         let kind = focused
             .CurrentControlType()
             .map_err(|error| error.to_string())?;
-        if kind != UIA_EditControlTypeId {
+        let editable_combo = kind == UIA_ComboBoxControlTypeId
+            && focused
+                .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                .and_then(|value| value.CurrentIsReadOnly())
+                .is_ok_and(|read_only| !read_only.as_bool());
+        if kind != UIA_EditControlTypeId && kind != UIA_TextControlTypeId && !editable_combo {
             return Err(format!("focused element is control type {}", kind.0));
         }
         if focused
