@@ -4,31 +4,38 @@
   <meta charset="utf-8">
   <title>Yap recording</title>
   <link rel="stylesheet" href="classical.css">
+  <script src="theme.js"></script>
   <style>
     html, body { background: transparent; overflow: hidden; }
-    .bar { width: 100vw; height: 100vh; position: relative; display: flex; align-items: center; gap: 14px; padding: 0 8px 0 16px;
-      background: var(--color-text); color: var(--color-bg); overflow: hidden; user-select: none; }
-    .bar.error { background: var(--color-accent); }
-    .rec { width: 10px; height: 10px; flex: none; background: var(--color-accent); animation: blink 1s ease-in-out infinite; }
-    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-    .wave { display: flex; align-items: center; gap: 3px; height: 32px; }
-    .wave span { width: 3px; height: 4px; background: var(--color-bg); transition: height 60ms linear; }
-    .label { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar { width: 100vw; height: 100vh; position: relative; display: flex; align-items: center; gap: 14px; padding: 0 10px 0 20px;
+      background: var(--color-text); color: var(--color-bg); border-radius: 999px; overflow: hidden; user-select: none; }
+    .bar.error { background: var(--color-accent); color: var(--color-on-accent); }
+    .rec { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--color-accent);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 25%, transparent); animation: blink 1.4s ease-in-out infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+    .wave { display: flex; align-items: center; gap: 3px; height: 30px; }
+    .wave span { width: 3px; height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--color-bg) 85%, transparent); transition: height 60ms linear; }
+    .label { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .time, .detail { font-size: 13px; font-variant-numeric: tabular-nums; opacity: .7; white-space: nowrap; }
-    .detail { font-size: 12px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
-    .scan { position: absolute; left: 0; bottom: 0; height: 3px; width: 40%; background: var(--color-accent); animation: scan 1.2s linear infinite; }
-    @keyframes scan { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
-    .bar .btn { font-size: 13px; padding: 6px 12px; }
+    .time, .detail { padding-right: 10px; }
+    .detail { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+    .chk { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--color-accent); color: #1E1E1D; }
+    .scan { position: absolute; left: 20px; right: 20px; bottom: 7px; height: 3px; border-radius: 3px; overflow: hidden;
+      background: color-mix(in srgb, var(--color-bg) 14%, transparent); }
+    .scan i { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: 3px; background: var(--color-accent); animation: scan 1.4s ease-in-out infinite; }
+    @keyframes scan { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+    .bar .btn { height: 36px; padding: 0 16px; border: 0; border-radius: 999px; font-size: 13px; font-weight: 600; }
     .stop { color: var(--color-text); background: var(--color-bg); }
-    .outline { color: var(--color-bg); border-color: color-mix(in srgb, var(--color-bg) 35%, transparent); }
+    .outline { color: var(--color-bg); background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-bg) 35%, transparent); }
     .outline:hover { background: color-mix(in srgb, var(--color-bg) 12%, transparent); }
+    @media (prefers-reduced-motion: reduce) { .rec, .scan i { animation: none; } }
   </style>
 </head>
 <body>
   <div class="bar" id="bar">
     <span class="rec" id="rec"></span>
-    <svg id="cpu" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
-    <svg id="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <svg id="cpu" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
+    <span class="chk" id="check"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
     <svg id="warn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <div class="wave" id="wave"></div>
     <span class="label" id="label"></span>
@@ -36,7 +43,7 @@
     <span class="time" id="time"></span>
     <button class="btn stop" id="stop" type="button">Stop</button>
     <button class="btn outline" id="undo" type="button">Undo</button>
-    <span class="scan" id="scan"></span>
+    <span class="scan" id="scan"><i></i></span>
   </div>
   <script>
     const { invoke } = window.__TAURI__.core;

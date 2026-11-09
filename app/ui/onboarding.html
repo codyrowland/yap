@@ -5,23 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Welcome to Yap</title>
   <link rel="stylesheet" href="classical.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <div class="onboarding">
-    <header class="topbar"><span class="brand-square"></span>Welcome to Yap</header>
     <div class="onboarding-body">
       <nav class="onboarding-nav" aria-label="Setup steps">
         <h1>Yap</h1>
-        <button data-step="0" type="button">1 · Permissions</button>
-        <button data-step="1" type="button" disabled>2 · Engine</button>
-        <button data-step="2" type="button" disabled>3 · Set up engine</button>
-        <button data-step="3" type="button" disabled>4 · Talk keys</button>
-        <button data-step="4" type="button" disabled>5 · Try it</button>
+        <button data-step="0" type="button"><span class="num">1</span>Permissions</button>
+        <button data-step="1" type="button" disabled><span class="num">2</span>Engine</button>
+        <button data-step="2" type="button" disabled><span class="num">3</span>Set up engine</button>
+        <button data-step="3" type="button" disabled><span class="num">4</span>Talk keys</button>
+        <button data-step="4" type="button" disabled><span class="num">5</span>Try it</button>
       </nav>
       <main class="onboarding-content">
         <div>
           <section id="step-0">
-            <small>Step 1 of 5</small>
+            <small class="step-kicker">Step 1 of 5</small>
             <h2>Two permissions</h2>
             <p>Yap listens only while you dictate, then inserts text into the app you're using.</p>
             <div class="row"><span>Microphone<br><small>To hear you while recording.</small></span><strong id="mic-state">Checking…</strong></div>
@@ -32,15 +32,15 @@
             <p id="permission-error" role="status"></p>
           </section>
           <section id="step-1" hidden>
-            <small>Step 2 of 5</small>
+            <small class="step-kicker">Step 2 of 5</small>
             <h2>Where should speech be transcribed?</h2>
             <p>You can change this any time in Settings.</p>
-            <label class="row radio"><span>On this computer<br><small>Private and offline after downloading a Parakeet or Whisper model.</small></span><input name="engine" type="radio" value="local" checked><span class="dot"></span></label>
-            <label class="row radio"><span>Cloud API<br><small>OpenAI, Groq, Fireworks AI or another OpenAI-compatible service, with your own API key.</small></span><input name="engine" type="radio" value="cloud"><span class="dot"></span></label>
-            <label class="row radio"><span>Self-hosted server<br><small>A transcription server you run on another machine.</small></span><input name="engine" type="radio" value="remote"><span class="dot"></span></label>
+            <label class="row radio choice"><input name="engine" type="radio" value="local" checked><span class="dot"></span><span>On this computer<br><small>Private and offline after downloading a Parakeet or Whisper model.</small></span><span class="tag tag-accent">Recommended</span></label>
+            <label class="row radio choice"><input name="engine" type="radio" value="cloud"><span class="dot"></span><span>Cloud API<br><small>OpenAI, Groq, Fireworks AI or another OpenAI-compatible service, with your own API key.</small></span></label>
+            <label class="row radio choice"><input name="engine" type="radio" value="remote"><span class="dot"></span><span>Self-hosted server<br><small>A transcription server you run on another machine.</small></span></label>
           </section>
           <section id="step-2" hidden>
-            <small>Step 3 of 5</small>
+            <small class="step-kicker">Step 3 of 5</small>
             <div id="local-setup">
               <h2>Download a model</h2>
               <p>Pick a model to run on this computer. Parakeet is the fastest on most PCs; Whisper covers more languages. More sizes are in Settings → On-device.</p>
@@ -73,21 +73,31 @@
             </div>
           </section>
           <section id="step-3" hidden>
-            <small>Step 4 of 5</small>
+            <small class="step-kicker">Step 4 of 5</small>
             <h2>Set your talk keys</h2>
             <p>Press keys one at a time, then choose Save keys. Hold them together when dictating in other apps. Choose two different combinations.</p>
-            <label class="field" for="hold-key">Hold to talk</label>
-            <button id="hold-key" class="btn btn-secondary" type="button">Ctrl+Space</button>
-            <button id="save-hold-key-capture" class="btn btn-primary" type="button" hidden>Save keys</button>
-            <button id="cancel-hold-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
-            <label class="field" for="toggle-key">Toggle dictation</label>
-            <button id="toggle-key" class="btn btn-secondary" type="button">Ctrl+Shift+Space</button>
-            <button id="save-toggle-key-capture" class="btn btn-primary" type="button" hidden>Save keys</button>
-            <button id="cancel-toggle-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
-            <p>Press Esc to cancel a recording without inserting text.</p>
+            <div class="rows">
+              <div class="key-row">
+                <div class="what"><strong>Hold to talk</strong><span>Hold, speak, release.</span></div>
+                <div class="key-field">
+                  <button id="hold-key" class="key-button" type="button" aria-label="Hold to talk"></button>
+                  <button id="save-hold-key-capture" class="btn btn-primary" type="button" hidden>Save keys</button>
+                  <button id="cancel-hold-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
+                </div>
+              </div>
+              <div class="key-row">
+                <div class="what"><strong>Toggle dictation</strong><span>Press to start and stop.</span></div>
+                <div class="key-field">
+                  <button id="toggle-key" class="key-button" type="button" aria-label="Toggle dictation"></button>
+                  <button id="save-toggle-key-capture" class="btn btn-primary" type="button" hidden>Save keys</button>
+                  <button id="cancel-toggle-key-capture" class="btn btn-secondary" type="button" hidden>Cancel</button>
+                </div>
+              </div>
+            </div>
+            <p style="margin-top:16px">Press Esc to cancel a recording without inserting text.</p>
           </section>
           <section id="step-4" hidden>
-            <small>Step 5 of 5</small>
+            <small class="step-kicker">Step 5 of 5</small>
             <h2>Try it</h2>
             <p>With the cursor in the box below, hold <strong id="hold-label"></strong>, say a sentence, then let go. Yap types your words into the box — exactly the way it will in any other app. For longer passages, press <strong id="toggle-label"></strong> once to start and again to stop.</p>
             <textarea id="practice" class="input" placeholder="Your words appear here" aria-label="Dictation practice"></textarea>
@@ -125,16 +135,32 @@
 
     const keyText = (shortcut, separator = '+') => KeyCapture.labels(shortcut).join(separator);
 
+    function showKeys(button, shortcut, prompt) {
+      const caps = KeyCapture.labels(shortcut).map(part => {
+        const cap = document.createElement('span');
+        cap.className = 'keycap';
+        cap.textContent = part;
+        return cap;
+      });
+      const text = document.createElement('span');
+      text.className = prompt ? 'listen' : 'hint';
+      text.textContent = prompt || 'Click to change';
+      button.replaceChildren(...caps, text);
+    }
+
     function setKey(button, key) {
       button.value = key;
-      button.textContent = keyText(key);
+      showKeys(button, key);
     }
 
     const capture = KeyCapture.create({ onChange: renderCapture, onError: say });
     function renderCapture() {
       for (const [kind, button] of [['hold', holdKey], ['toggle', toggleKey]]) {
         const listening = capture.kind === kind;
-        button.textContent = listening ? keyText(capture.shortcut()) || 'Press keys one at a time…' : keyText(button.value);
+        const preview = capture.shortcut();
+        button.classList.toggle('listening', listening);
+        if (listening) showKeys(button, preview, preview ? ' — add a key, or Save' : 'Press keys one at a time…');
+        else showKeys(button, button.value);
         document.getElementById(`save-${kind}-key-capture`).hidden = !listening || !capture.shortcut();
         document.getElementById(`cancel-${kind}-key-capture`).hidden = !listening;
       }
@@ -173,6 +199,9 @@
         nav.disabled = i > reached;
         if (i === step) nav.setAttribute('aria-current', 'step');
         else nav.removeAttribute('aria-current');
+        const done = i < reached && i !== step;
+        nav.classList.toggle('done', done);
+        nav.querySelector('.num').textContent = done ? '✓' : String(i + 1);
       }
       document.getElementById('back').hidden = step === 0;
       next.textContent = step === 4 ? 'Finish' : 'Continue';

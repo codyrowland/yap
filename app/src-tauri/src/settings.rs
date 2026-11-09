@@ -46,6 +46,14 @@ pub enum Insertion {
     Type,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -75,6 +83,7 @@ pub struct Settings {
     pub cleanup_enabled: bool,
     /// Which clean-up model (`cleanup::MODELS`).
     pub cleanup_model: String,
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -100,6 +109,7 @@ impl Default for Settings {
             mute_while_recording: true,
             cleanup_enabled: false,
             cleanup_model: "qwen3.5-2b".to_owned(),
+            theme: Theme::Dark,
         }
     }
 }
@@ -428,6 +438,7 @@ mod tests {
         assert!(settings.mute_while_recording);
         assert!(!settings.cleanup_enabled);
         assert_eq!(settings.cleanup_model, "qwen3.5-2b");
+        assert_eq!(settings.theme, Theme::Dark);
     }
 
     #[test]

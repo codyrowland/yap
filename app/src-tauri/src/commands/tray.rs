@@ -126,9 +126,9 @@ pub fn open_window(page: String, app: AppHandle) -> Result<(), String> {
 }
 
 pub fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
-    let file = match page {
-        "settings" => "index.html",
-        "history" => "history.html",
+    let tab = match page {
+        "settings" => None,
+        "history" => Some("history"),
         _ => return Err("Unknown page".to_owned()),
     };
     if let Some(tray) = app.get_webview_window(crate::tray::LABEL) {
@@ -140,10 +140,15 @@ pub fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     let onboarding = config::onboarding_path(app)?.is_file();
     if !onboarding {
         let current = window.url().map_err(|error| error.to_string())?;
-        if !current.path().ends_with(file) {
-            window
-                .eval(format!("location.replace('{file}')"))
-                .map_err(|error| error.to_string())?;
+        let on_settings = current.path().ends_with("index.html");
+        let script = match (on_settings, tab) {
+            (true, None) => None,
+            (true, Some(tab)) => Some(format!("location.hash = '{tab}'")),
+            (false, None) => Some("location.replace('index.html')".to_owned()),
+            (false, Some(tab)) => Some(format!("location.replace('index.html#{tab}')")),
+        };
+        if let Some(script) = script {
+            window.eval(script).map_err(|error| error.to_string())?;
         }
     }
     let _ = window.unminimize();

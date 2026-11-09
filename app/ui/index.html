@@ -5,12 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Yap Settings</title>
   <link rel="stylesheet" href="classical.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <div class="settings">
-    <header class="topbar"><span class="brand-square"></span>Yap
-      <nav><a href="index.html" aria-current="page">Settings</a><a href="history.html">History</a></nav>
-    </header>
     <div class="settings-body">
       <nav class="settings-nav" aria-label="Settings">
         <span class="kicker">Input</span>
@@ -25,10 +23,12 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg><span class="label">Cloud API</span><span class="dot"></span></button>
         <button type="button" data-tab="remote" data-engine="remote">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg><span class="label">Self-hosted</span><span class="dot"></span></button>
+        <button type="button" data-tab="history" class="nav-bottom">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="label">History</span></button>
         <div class="settings-active"><span class="kicker">Transcribing with</span><strong id="active-label"></strong><span id="active-detail"></span></div>
       </nav>
 
-      <main class="settings-panel">
+      <main class="settings-panel" id="panel">
         <!-- 2b · Talk keys -->
         <section id="tab-talk" hidden>
           <h3>Talk keys</h3>
@@ -69,6 +69,13 @@
           <h3>General</h3>
           <p class="panel-intro">How Yap behaves across your system.</p>
           <div class="rows">
+            <div class="setting-row">
+              <div class="what"><strong>Appearance</strong><span>Colour theme for Yap's windows.</span></div>
+              <div class="seg" role="radiogroup" aria-label="Appearance">
+                <label class="seg-opt"><input type="radio" name="theme" value="dark">Dark</label>
+                <label class="seg-opt"><input type="radio" name="theme" value="light">Light</label>
+              </div>
+            </div>
             <div class="setting-row">
               <div class="what"><strong>Microphone</strong><span>Used for every dictation.</span></div>
               <div class="control"><select id="microphone" class="input"></select></div>
@@ -163,6 +170,21 @@
           </div>
           <p class="muted" style="margin:24px 0 0;font-size:12px;max-width:520px">Yap sends audio as multipart form data and expects a JSON response with a <span class="mono">text</span> field — the same shape as OpenAI's transcription endpoint. Plain <span class="mono">http://</span> exposes audio and the token on your network.</p>
         </section>
+        <section id="tab-history" class="history-tab" hidden>
+          <div class="history-toolbar">
+            <div class="history-search">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="query" class="input" type="search" placeholder="Search transcriptions" aria-label="Search transcriptions">
+            </div>
+            <select id="app-filter" class="input" aria-label="Filter by app"><option>All apps</option></select>
+            <span id="count"></span>
+          </div>
+          <div class="history-content">
+            <div id="history-list" class="history-list"></div>
+            <div id="history-detail" class="history-detail"></div>
+          </div>
+          <div id="message" role="status"></div>
+        </section>
       </main>
     </div>
     <div id="status" class="status-line" role="status"></div>
@@ -171,6 +193,7 @@
   <script src="keys.js"></script>
   <script src="models.js"></script>
   <script src="credentials.js"></script>
+  <script src="history.js"></script>
   <script>
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
@@ -218,11 +241,13 @@
     // ---------- render ----------
     function render() {
       if (!settings || !catalog) return;
+      Theme.apply(settings.theme);
       for (const button of document.querySelectorAll('[data-tab]')) {
         if (button.dataset.tab === tab) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
         button.classList.toggle('engine-active', button.dataset.engine === settings.engine);
       }
       for (const section of document.querySelectorAll('main section')) section.hidden = section.id !== `tab-${tab}`;
+      $('panel').classList.toggle('flush', tab === 'history');
       const [label, detail] = activeEngine();
       $('active-label').textContent = label;
       $('active-detail').textContent = detail;
@@ -358,6 +383,7 @@
       $('show-overlay').setAttribute('aria-checked', String(settings.showOverlay));
       $('mute-while-recording').setAttribute('aria-checked', String(settings.muteWhileRecording));
       for (const radio of document.querySelectorAll('[name="insertion"]')) radio.checked = radio.value === settings.insertion;
+      for (const radio of document.querySelectorAll('[name="theme"]')) radio.checked = radio.value === settings.theme;
       $('language').value = settings.language;
     }
     $('microphone').onchange = event => save({ microphoneIndex: Number(event.target.value) });
@@ -365,6 +391,7 @@
     $('show-overlay').onclick = () => save({ showOverlay: !settings.showOverlay });
     $('mute-while-recording').onclick = () => save({ muteWhileRecording: !settings.muteWhileRecording });
     for (const radio of document.querySelectorAll('[name="insertion"]')) radio.onchange = () => save({ insertion: radio.value });
+    for (const radio of document.querySelectorAll('[name="theme"]')) radio.onchange = () => save({ theme: radio.value });
     $('language').onchange = event => save({ language: event.target.value });
 
     // ---------- 2c on-device ----------
@@ -606,9 +633,20 @@
     }
 
     // ---------- engine switching and tabs ----------
+    const TABS = ['talk', 'general', 'local', 'cloud', 'remote', 'history'];
+    const hashTab = () => TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'talk';
+    function showTab(next) {
+      capture.cancel().catch(say);
+      tab = next;
+      history.replaceState(null, '', `#${tab}`);
+      say('');
+      render();
+      if (tab === 'history') HistoryTab.refresh();
+    }
+    window.addEventListener('hashchange', () => { if (settings && catalog) showTab(hashTab()); });
     for (const button of document.querySelectorAll('.use-engine')) button.onclick = () => save({ engine: button.dataset.engine });
     for (const button of document.querySelectorAll('[data-tab]')) {
-      button.onclick = () => { capture.cancel().catch(say); tab = button.dataset.tab; say(''); render(); };
+      button.onclick = () => showTab(button.dataset.tab);
     }
 
     // ---------- events ----------
@@ -634,8 +672,7 @@
       devices.forEach((name, index) => $('microphone').add(new Option(name, index)));
       if (!devices.length) say('No microphones found');
       for (const [code, label] of catalog.languages) $('language').add(new Option(label, code));
-      tab = { local: 'local', cloud: 'cloud', remote: 'remote' }[location.hash.slice(1)] || 'talk';
-      render();
+      showTab(hashTab());
       refreshCredential('remote', '');
     }).catch(say);
   </script>
