@@ -2,7 +2,7 @@
 
 Hold a key, talk, let go. Your words show up wherever your cursor is: an email, Slack, a doc, your code editor, a search box. That's Yap.
 
-I'm an engineer, and I wanted to build something people would actually use. Voice typing seemed like the obvious one, but most options want an account, a subscription and your audio on their servers. Yap doesn't.
+Out of the many tools that are made for productivity, voice typing has been one that has stuck with me in my workflow. However, most options want an account, a subscription and your audio on their servers.
 
 ## Your voice is yours
 
@@ -14,7 +14,7 @@ What you say can be private: messages, notes, work you can't share. So Yap leave
 
 Either way, Yap only listens while you're dictating, and it doesn't keep recordings. Your dictation history only covers today and stays on your computer, and API keys live in Windows Credential Manager, not in a settings file.
 
-And to be clear: I have no interest in tracking what you say. There's no analytics, no telemetry, no account. The only time Yap goes online is to download a model you asked for or to reach the cloud provider you picked. Your data is yours, and honestly, I don't want to hear about your bad ideas.
+And to be clear: I have no interest in tracking what you say. There's no analytics, no telemetry, no account. The only time Yap goes online is to download a model you asked for or to reach the cloud provider you picked. Your data is yours, and honestly, I don't want to hear about your bad ideas :)
 
 ## What's good about it
 
