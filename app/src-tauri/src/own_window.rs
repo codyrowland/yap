@@ -35,8 +35,7 @@ struct Request<'a> {
 /// Whether Yap's window with text fields is the one in front.
 pub fn in_front(app: &AppHandle) -> bool {
     app.get_webview_window(WINDOW)
-        .and_then(|window| window.is_focused().ok())
-        .unwrap_or(false)
+        .is_some_and(|window| crate::platform::is_active_window(&window))
 }
 
 /// Inserts `text` at the cursor in Yap's window. Blocks until the page
