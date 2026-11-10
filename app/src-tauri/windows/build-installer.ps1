@@ -1,6 +1,10 @@
 # Builds the Windows installer (target/release/bundle/nsis).
 # Downloads the Visual C++ runtime installer the first time; it is checked
 # for a valid Microsoft signature and not committed.
+param(
+    [switch]$Signed
+)
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $redist = Join-Path $PSScriptRoot 'vc_redist.x64.exe'
@@ -18,9 +22,14 @@ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notm
 
 Push-Location $root
 try {
-    cargo tauri build
+    if ($Signed) {
+        cargo tauri bundle --config windows/tauri.signing.conf.json
+    } else {
+        cargo tauri build
+    }
+
     if ($LASTEXITCODE -ne 0) {
-        throw 'cargo tauri build failed'
+        throw 'Tauri installer build failed'
     }
 } finally {
     Pop-Location

@@ -1,12 +1,13 @@
 {
   "bundle": {
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
     "macOS": {
       "frameworks": [
         "target/release/libsherpa-onnx-c-api.dylib",
         "target/release/libonnxruntime.dylib"
       ],
-      "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
       "minimumSystemVersion": "11.0"
     }
   }

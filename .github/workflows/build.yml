@@ -8,6 +8,14 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    environment: release-signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARTIFACT_SIGNING_ENDPOINT: https://wus2.codesigning.azure.net/
+      ARTIFACT_SIGNING_ACCOUNT: Yap
+      ARTIFACT_SIGNING_PROFILE: yap-public
     steps:
       - uses: actions/checkout@v4
 
@@ -20,13 +28,72 @@ jobs:
           }
           Expand-Archive $zip -DestinationPath "$env:USERPROFILE\.cargo\bin" -Force
 
-      - name: Build installer
-        run: app/src-tauri/windows/build-installer.ps1
+      - name: Build application
+        working-directory: app/src-tauri
+        run: cargo tauri build --no-bundle -- --locked
+
+      - name: Log in to Azure
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac
+        with:
+          client-id: f62486f5-c290-4f2a-887d-6584f90997d9
+          tenant-id: 9540a51e-5fdf-4988-b964-070a537202d5
+          subscription-id: 31781dda-89fe-4e98-a62d-7dbf73c0ac41
+
+      - name: Sign runtime libraries
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82
+        with:
+          endpoint: ${{ env.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.ARTIFACT_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\app\src-tauri\target\release\sherpa-onnx-c-api.dll
+            ${{ github.workspace }}\app\src-tauri\target\release\onnxruntime.dll
+            ${{ github.workspace }}\app\src-tauri\target\release\onnxruntime_providers_shared.dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+
+      - name: Build and sign installer
+        run: app/src-tauri/windows/build-installer.ps1 -Signed
+
+      - name: Verify signatures and timestamps
+        run: |
+          $installers = @(Get-ChildItem 'app/src-tauri/target/release/bundle/nsis/*.exe' -ErrorAction Stop)
+          if ($installers.Count -ne 1) {
+            throw "Expected one installer, found $($installers.Count)"
+          }
+
+          $installDir = Join-Path $env:RUNNER_TEMP 'yap-signing-check'
+          $process = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Silent install failed with exit code $($process.ExitCode)"
+          }
+
+          $installed = @(Get-ChildItem $installDir -Recurse -File -Include '*.exe', '*.dll')
+          foreach ($name in 'uninstall.exe', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll') {
+            if (-not ($installed | Where-Object Name -eq $name)) {
+              throw "Installed file missing: $name"
+            }
+          }
+
+          if (-not ($installed | Where-Object { $_.Extension -eq '.exe' -and $_.Name -ne 'uninstall.exe' })) {
+            throw 'Installed application executable missing'
+          }
+
+          $files = @($installers[0].FullName) + $installed.FullName
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate) {
+              throw "Signature or timestamp verification failed: $file ($($signature.Status))"
+            }
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: Yap-windows-x64
           path: app/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
           retention-days: 7
 
   macos:
@@ -39,19 +106,57 @@ jobs:
           - runner: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Yap.app
-        working-directory: app/src-tauri
-        run: npx --yes @tauri-apps/cli@2.12.4 build --bundles app
+      - name: Check signing credentials
+        shell: bash
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing secret: $name"
+              exit 1
+            fi
+          done
+          if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
+            echo '::error::A Developer ID Application signing identity is required'
+            exit 1
+          fi
 
-      - name: Zip
-        working-directory: app/src-tauri/target/release/bundle/macos
-        run: ditto -c -k --keepParent Yap.app Yap-macos-${{ matrix.arch }}.zip
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '=2.12.4' --locked
+
+      - name: Build, sign, and notarize
+        working-directory: app/src-tauri
+        run: cargo tauri build -- --locked
+
+      - name: Verify signing and notarization
+        run: |
+          app='app/src-tauri/target/release/bundle/macos/Yap.app'
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+      - name: Notarize DMG
+        run: |
+          dmg=$(ls app/src-tauri/target/release/bundle/dmg/*.dmg)
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Yap-macos-${{ matrix.arch }}
-          path: app/src-tauri/target/release/bundle/macos/Yap-macos-${{ matrix.arch }}.zip
+          path: app/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
           retention-days: 7
