@@ -526,13 +526,13 @@
       const store = el('button', 'btn btn-secondary', 'Save');
       store.type = 'button';
       store.onclick = async () => {
-        try { await Credentials.save(kind, providerId, input.value); input.value = ''; await refreshCredential(kind, providerId); say('Saved in Windows Credential Manager'); }
+        try { await Credentials.save(kind, providerId, input.value); input.value = ''; await refreshCredential(kind, providerId); say(`Saved in ${Credentials.store}`); }
         catch (error) { say(error); }
       };
       line.append(input, reveal, store);
       const statusLine = el('div');
       statusLine.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px';
-      statusLine.append(el('span', 'muted', saved ? 'Saved in Windows Credential Manager' : 'Not saved'));
+      statusLine.append(el('span', 'muted', saved ? `Saved in ${Credentials.store}` : 'Not saved'));
       if (saved) {
         const remove = el('button', 'btn btn-ghost btn-small', 'Remove');
         remove.type = 'button';
@@ -602,8 +602,8 @@
       test.append(button, el('span', null, cloudTest));
       grid.append(test);
       $('cloud-note').textContent = p.id === 'custom'
-        ? 'Audio is sent to the server at this base URL for each dictation. The key is stored in Windows Credential Manager, tied to that URL.'
-        : `Audio is sent to ${p.label} for each dictation and billed to your account. Credentials are stored in Windows Credential Manager.`;
+        ? `Audio is sent to the server at this base URL for each dictation. The key is stored in ${Credentials.store}, tied to that URL.`
+        : `Audio is sent to ${p.label} for each dictation and billed to your account. Credentials are stored in ${Credentials.store}.`;
       if (credentialStatus['cloud:' + p.id] === undefined) { credentialStatus['cloud:' + p.id] = false; refreshCredential('cloud', p.id); }
     }
     $('cloud-provider').onchange = event => { cloudTest = ''; save({ cloudProvider: event.target.value }).then(() => refreshCredential('cloud', settings.cloudProvider)); };
@@ -616,7 +616,7 @@
       const saved = credentialStatus['remote:'];
       $('remote-token').placeholder = saved ? '•••••••• saved' : 'Optional';
       $('remote-token-status').textContent = !settings.remoteEndpoint ? 'Enter a server URL first'
-        : saved ? 'Saved in Windows Credential Manager' : settings.remoteApiKeyEnv ? `Using the ${settings.remoteApiKeyEnv} environment variable` : 'No token saved';
+        : saved ? `Saved in ${Credentials.store}` : settings.remoteApiKeyEnv ? `Using the ${settings.remoteApiKeyEnv} environment variable` : 'No token saved';
       $('remove-remote-token').hidden = !saved;
       $('remote-test').textContent = remoteTest;
     }

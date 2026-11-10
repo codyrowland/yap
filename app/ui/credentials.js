@@ -3,6 +3,7 @@
 window.Credentials = (() => {
   const { invoke } = window.__TAURI__.core;
   return {
+    store: /Mac/.test(navigator.userAgent) ? 'Keychain' : 'Windows Credential Manager',
     saved: (kind, provider = '') => invoke('credential_status', { kind, provider }),
     save: (kind, provider, secret) => invoke('update_credential', { kind, provider, secret }),
     remove: (kind, provider = '') => invoke('update_credential', { kind, provider, secret: null }),

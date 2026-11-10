@@ -48,7 +48,7 @@
             </div>
             <div id="cloud-setup" hidden>
               <h2>Connect a cloud provider</h2>
-              <p>Audio is sent to the provider for each dictation and billed to your account. The key is kept in Windows Credential Manager, not in settings.</p>
+              <p>Audio is sent to the provider for each dictation and billed to your account. The key is kept in <span class="credential-store">Windows Credential Manager</span>, not in settings.</p>
               <label class="field" for="cloud-provider">Provider</label>
               <select id="cloud-provider" class="input"></select>
               <div id="custom-url-field" hidden>
@@ -63,7 +63,7 @@
             </div>
             <div id="remote-setup" hidden>
               <h2>Connect a transcription server</h2>
-              <p>Enter an OpenAI-compatible transcription endpoint. API keys are kept in Windows Credential Manager, not in settings.</p>
+              <p>Enter an OpenAI-compatible transcription endpoint. API keys are kept in <span class="credential-store">Windows Credential Manager</span>, not in settings.</p>
               <label class="field" for="endpoint">Transcription URL</label>
               <input id="endpoint" class="input" type="url" placeholder="https://asr.home.lan:9000/v1/audio/transcriptions">
               <label class="field" for="remote-model">Model</label>
@@ -126,6 +126,7 @@
     let reached = 0;
     let permissions = null;
     const mac = /Mac/.test(navigator.userAgent);
+    document.querySelectorAll('.credential-store').forEach(store => { store.textContent = Credentials.store; });
     const accessMissing = mac ? 'Turn on Yap in System Settings › Privacy & Security › Accessibility, then check again.' : 'Windows UI Automation could not start.';
     if (mac) document.getElementById('access-hint').textContent = 'To hear your talk keys and type into other apps.';
     let models = [];

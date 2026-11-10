@@ -14,13 +14,13 @@
     .ready i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
     .ready.busy { background: var(--color-accent-100); color: var(--color-accent-800); }
     .keys { margin: 0 8px; padding: 8px; border-radius: 12px; display: flex; flex-direction: column; gap: 8px;
-      background: color-mix(in srgb, var(--color-surface) 70%, var(--color-bg)); }
+      background: var(--color-tray-keys); }
     .keys div { display: flex; align-items: center; gap: 6px; padding: 2px 4px; }
     .keys div > span:first-child { font-size: 13px; flex: 1; }
     .label { padding: 14px 18px 4px; font-size: 11px; font-weight: 600; color: var(--color-neutral-600); }
     .engines { display: flex; flex-direction: column; gap: 2px; }
     .engine { display: flex; align-items: center; gap: 12px; margin: 0 8px; padding: 9px 10px; border: 0; border-radius: 12px; background: transparent; text-align: left; }
-    .engine:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+    .engine:hover { background: rgba(var(--rgb-text), .06); }
     .engine[aria-checked='true'] { background: var(--color-accent-100); }
     .engine .ring { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 1.5px solid var(--color-neutral-400); }
     .engine[aria-checked='true'] .ring { border-color: var(--color-accent); }
