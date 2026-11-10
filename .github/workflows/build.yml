@@ -103,8 +103,12 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
+            tauri-cli: cargo-tauri-aarch64-apple-darwin.zip
+            tauri-cli-sha256: f71a34ada728ca2d1a51c28d6d21639e1e080898ec69ec8d49c5da3b7e8bc1be
           - runner: macos-15-intel
             arch: x64
+            tauri-cli: cargo-tauri-x86_64-apple-darwin.zip
+            tauri-cli-sha256: 164d184c0e50800dcae7bb31f0815066ebd27efc3e3bb73117974bcd2e982192
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -133,7 +137,16 @@ jobs:
           fi
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '=2.12.4' --locked
+        env:
+          TAURI_CLI: ${{ matrix.tauri-cli }}
+          TAURI_CLI_SHA256: ${{ matrix.tauri-cli-sha256 }}
+        run: |
+          zip="$RUNNER_TEMP/$TAURI_CLI"
+          curl -fsSL --retry 3 -o "$zip" "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.4/$TAURI_CLI"
+          echo "$TAURI_CLI_SHA256  $zip" | shasum -a 256 -c -
+          mkdir -p "$HOME/.cargo/bin"
+          unzip -o -q "$zip" cargo-tauri -d "$HOME/.cargo/bin"
+          cargo tauri --version
 
       - name: Build, sign, and notarize
         working-directory: app/src-tauri
