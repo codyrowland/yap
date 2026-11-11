@@ -14,6 +14,8 @@
 <meta property="og:url" content="https://codyrowland.github.io/yap/">
 <meta name="twitter:card" content="summary_large_image">
 <style>
+  @font-face { font-family: 'DM Sans'; src: url('dm-sans-latin.woff2') format('woff2'); font-weight: 100 1000; font-display: swap; }
+  @font-face { font-family: 'Fraunces'; src: url('fraunces-latin.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
   :root {
     --bg: #191919;
     --surface: #232322;
@@ -23,25 +25,34 @@
     --accent-hover: #BD8F4A;
     --on-accent: #191919;
     --divider: rgba(240, 235, 227, .12);
-    --heading: Georgia, 'Times New Roman', serif;
-    --body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --heading: 'Fraunces', Georgia, serif;
+    --body: 'DM Sans', system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); line-height: 1.6; }
-  main { max-width: 880px; margin: 0 auto; padding: 64px 24px; }
-  h1, h2 { font-family: var(--heading); font-weight: 600; line-height: 1.2; }
-  h1 { font-size: 3.5rem; margin: 0; display: flex; align-items: center; gap: 20px; }
-  h1 img { width: 72px; height: 72px; }
-  h1 span { color: var(--accent); }
-  h2 { font-size: 1.6rem; margin: 56px 0 16px; }
-  .tagline { font-size: 1.4rem; color: var(--muted); margin: 8px 0 32px; }
+  main { max-width: 880px; margin: 0 auto; padding: 0 24px 64px; }
+  h1, h2 { font-family: var(--heading); font-weight: 600; line-height: 1.15; }
+  h2 { font-size: 1.8rem; margin: 72px 0 16px; }
+  .nav { max-width: 1160px; margin: 0 auto; padding: 24px; display: flex; align-items: center; justify-content: space-between; }
+  .logo { display: flex; align-items: center; gap: 12px; font-family: var(--heading); font-weight: 600; font-size: 1.8rem; color: var(--text); text-decoration: none; }
+  .logo img { width: 40px; height: 40px; }
+  .wordmark span { color: var(--accent); }
+  .nav-link { color: var(--muted); text-decoration: none; }
+  .nav-link:hover { color: var(--text); }
+  .hero { position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; top: -10%; right: -10%; width: 70%; height: 120%; background: radial-gradient(closest-side, rgba(182, 130, 53, .22), transparent); pointer-events: none; }
+  .hero-inner { position: relative; max-width: 1160px; margin: 0 auto; padding: 48px 24px 96px; display: grid; grid-template-columns: 5fr 6fr; gap: 56px; align-items: center; }
+  .hero h1 { font-size: clamp(2.6rem, 5vw, 4.2rem); margin: 0 0 20px; }
+  .hero h1 em { font-style: italic; color: var(--accent); }
+  .tagline { font-size: 1.25rem; color: var(--muted); margin: 0 0 32px; }
+  @media (max-width: 860px) { .hero-inner { grid-template-columns: minmax(0, 1fr); padding-bottom: 64px; } }
   a { color: var(--accent-hover); }
   .downloads { display: flex; flex-wrap: wrap; gap: 12px; }
   .button { display: inline-block; padding: 14px 28px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 1.1rem; text-decoration: none; }
   .button:hover { background: var(--accent-hover); }
   .button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--divider); }
   .note { color: var(--muted); font-size: .95rem; margin-top: 12px; }
-  .screenshot { width: 100%; margin-top: 48px; border-radius: 16px; border: 1px solid var(--divider); box-shadow: 0 20px 44px -12px rgba(0, 0, 0, .6); }
+  .screenshot { width: 100%; height: auto; display: block; border-radius: 16px; border: 1px solid var(--divider); box-shadow: 0 20px 44px -12px rgba(0, 0, 0, .6); }
   .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; padding: 0; list-style: none; }
   .features li { background: var(--surface); border: 1px solid var(--divider); border-radius: 10px; padding: 20px; }
   .features strong { display: block; margin-bottom: 4px; }
@@ -50,18 +61,25 @@
 </style>
 </head>
 <body>
-<main>
-  <h1><img src="yap-icon-tile.svg" alt="">yap<span>.</span></h1>
-  <p class="tagline">Hold a key, talk, let go. Your words show up wherever your cursor is.</p>
-
-  <div class="downloads" id="downloads">
-    <a class="button" href="https://github.com/codyrowland/yap/releases">Download Yap</a>
+<header class="hero">
+  <nav class="nav">
+    <a class="logo" href="./"><img src="yap-icon-tile.svg" alt=""><span class="wordmark">yap<span>.</span></span></a>
+    <a class="nav-link" href="https://github.com/codyrowland/yap">GitHub</a>
+  </nav>
+  <div class="hero-inner">
+    <div>
+      <h1>Hold a key, talk, <em>let go.</em></h1>
+      <p class="tagline">Your words show up wherever your cursor is. Private by default, with speech-to-text running right on your computer.</p>
+      <div class="downloads" id="downloads">
+        <a class="button" href="https://github.com/codyrowland/yap/releases">Download Yap</a>
+      </div>
+      <p class="note" id="note">Windows 10 or 11 (64-bit) and macOS 11.3 or later. Free, no account needed.</p>
+      <p class="note" id="other"></p>
+    </div>
+    <img class="screenshot" src="yap-app.png" alt="Yap settings window" width="962" height="672">
   </div>
-  <p class="note" id="note">Windows 10 or 11 (64-bit) and macOS 11.3 or later. Free, no account needed.</p>
-  <p class="note" id="other"></p>
-
-  <img class="screenshot" src="yap-app.png" alt="Yap settings window">
-
+</header>
+<main>
   <h2>Your voice is yours</h2>
   <p>By default, speech-to-text runs on your computer. Download a model once and nothing gets uploaded. You can also use your own Whisper server or a cloud provider with your own API key. There's no analytics, no telemetry and no account, and Yap doesn't keep recordings.</p>
 
