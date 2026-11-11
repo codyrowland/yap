@@ -55,6 +55,9 @@ jobs:
           exclude-environment-credential: true
 
       - name: Build and sign installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: app/src-tauri/windows/build-installer.ps1 -Signed
 
       - name: Verify signatures and timestamps
@@ -92,7 +95,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Yap-windows-x64
-          path: app/src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
           retention-days: 7
 
@@ -119,6 +124,8 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -150,7 +157,14 @@ jobs:
 
       - name: Build, sign, and notarize
         working-directory: app/src-tauri
-        run: cargo tauri build -- --locked
+        run: cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked
+
+      - name: Name updater bundle by architecture
+        run: |
+          name=$(basename app/src-tauri/target/release/bundle/dmg/*.dmg .dmg)
+          cd app/src-tauri/target/release/bundle/macos
+          mv Yap.app.tar.gz "$name.app.tar.gz"
+          mv Yap.app.tar.gz.sig "$name.app.tar.gz.sig"
 
       - name: Verify signing and notarization
         run: |
@@ -170,6 +184,44 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Yap-macos-${{ matrix.arch }}
-          path: app/src-tauri/target/release/bundle/dmg/*.dmg
+          path: |
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+            app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+          retention-days: 7
+
+  updater-manifest:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Write latest.json
+        run: |
+          version=$(jq -r .version app/src-tauri/tauri.conf.json)
+          base="https://github.com/codyrowland/yap/releases/download/v$version"
+          entry() {
+            jq -n --arg url "$base/$1" --rawfile signature "artifacts/$1.sig" '{signature: $signature, url: $url}'
+          }
+          jq -n --arg version "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson windows "$(entry "Yap_${version}_x64-setup.exe")" \
+            --argjson arm "$(entry "Yap_${version}_aarch64.app.tar.gz")" \
+            --argjson intel "$(entry "Yap_${version}_x64.app.tar.gz")" \
+            '{version: $version, pub_date: $date, platforms: {"windows-x86_64": $windows, "darwin-aarch64": $arm, "darwin-x86_64": $intel}}' \
+            > latest.json
+          cat latest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yap-updater
+          path: latest.json
           if-no-files-found: error
           retention-days: 7

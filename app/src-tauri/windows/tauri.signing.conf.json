@@ -1,5 +1,6 @@
 {
   "bundle": {
+    "createUpdaterArtifacts": true,
     "windows": {
       "signCommand": {
         "cmd": "pwsh",

@@ -3,12 +3,15 @@
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, AppHandle, Emitter, Manager, PhysicalPosition, Rect};
+use tauri::{App, AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Rect};
 
 use crate::commands::tray::show_main;
 
 pub const LABEL: &str = "tray";
 const GAP: f64 = 8.0;
+const WIDTH: f64 = 320.0;
+const HEIGHT: f64 = 470.0;
+const UPDATE_BANNER_HEIGHT: f64 = 64.0;
 
 /// Places the popover just above (or below, for a top taskbar) the icon,
 /// kept inside the monitor's work area.
@@ -54,6 +57,12 @@ fn toggle_popover(app: &AppHandle, rect: Rect) {
         return;
     }
     let _ = app.emit_to(LABEL, "tray-refresh", ());
+    let height = if crate::commands::update::pending_update(app.clone()).is_some() {
+        HEIGHT + UPDATE_BANNER_HEIGHT
+    } else {
+        HEIGHT
+    };
+    let _ = window.set_size(LogicalSize::new(WIDTH, height));
     place(app, rect);
     let _ = window.show();
     let _ = window.set_focus();

@@ -1,1 +1,1 @@
-{"main":{"identifier":"main","description":"","local":true,"windows":["main","overlay","tray"],"permissions":["core:event:allow-listen","core:event:allow-unlisten","core:window:allow-hide"]}}
+{"main":{"identifier":"main","description":"","local":true,"windows":["main","overlay","tray"],"permissions":["core:app:allow-version","core:event:allow-listen","core:event:allow-unlisten","core:window:allow-hide"]}}

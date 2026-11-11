@@ -50,6 +50,7 @@ pub fn shutdown(app: &AppHandle) {
     talk_key_state::finish();
     overlay::hide(app);
     assistant::stop();
+    commands::update::install_pending_on_quit(app);
     app.exit(0);
 }
 
@@ -85,8 +86,10 @@ fn main() {
         // deaf inside Yap (wry #1761, tauri #13919). We don't use device
         // events, so turn the registration off.
         .device_event_filter(tauri::DeviceEventFilter::Always)
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Mutex::new(Session::new())))
         .manage(SharedSettings::default())
+        .manage(commands::update::PendingUpdate::default())
         .manage(Arc::new(Mutex::new(FieldWatch::start())))
         .manage(Arc::new(Mutex::new(None::<(String, Arc<AtomicBool>)>)))
         .invoke_handler(tauri::generate_handler![
@@ -113,6 +116,9 @@ fn main() {
             commands::tray::set_engine,
             commands::tray::open_window,
             commands::tray::quit_app,
+            commands::update::check_for_update,
+            commands::update::pending_update,
+            commands::update::install_update,
             onboarding::onboarding_needed,
             onboarding::onboarding_permissions,
             onboarding::complete_onboarding,
@@ -129,6 +135,7 @@ fn main() {
                 History::open(history_path).map_err(std::io::Error::other)?,
             ));
             start_history_expiry(app.handle().clone());
+            commands::update::start_auto_update(app.handle().clone());
 
             let settings = config::load(app.handle()).map_err(std::io::Error::other)?;
             let microphone: audio::MicrophoneState = Box::new(audio::SystemMicrophone);

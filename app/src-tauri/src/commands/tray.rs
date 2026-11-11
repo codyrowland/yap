@@ -25,6 +25,7 @@ pub struct TrayState {
     toggle_key: String,
     engine: Engine,
     engines: Vec<EngineChoice>,
+    update_version: Option<String>,
 }
 
 fn engine_choices(settings: &Settings) -> Vec<EngineChoice> {
@@ -81,6 +82,7 @@ fn engine_choices(settings: &Settings) -> Vec<EngineChoice> {
 pub fn tray_state(
     session: State<'_, SessionState>,
     settings: State<'_, SharedSettings>,
+    app: AppHandle,
 ) -> Result<TrayState, String> {
     let phase = lock(&session)?.coordinator.phase();
     let settings = settings.get();
@@ -95,6 +97,7 @@ pub fn tray_state(
         toggle_key: settings.toggle_key.clone(),
         engine: settings.engine,
         engines: engine_choices(&settings),
+        update_version: crate::commands::update::pending_update(app),
     })
 }
 

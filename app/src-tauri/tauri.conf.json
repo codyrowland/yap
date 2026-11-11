@@ -50,6 +50,14 @@
       }
     ]
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NTdENzI1NDI1MjBFNEQKUldSTkRsSkNKZGRYVmdEUVlxeFBiRlRUUWxrUlNxT0tVeHA2dFh6aXdQUGVuUlRadTVJVHpuZ1cK",
+      "endpoints": [
+        "https://github.com/codyrowland/yap/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "icon": [

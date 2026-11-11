@@ -86,6 +86,8 @@ pub struct Settings {
     /// Which clean-up model (`cleanup::MODELS`).
     pub cleanup_model: String,
     pub theme: Theme,
+    /// Download updates in the background and install them when Yap quits.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -113,6 +115,7 @@ impl Default for Settings {
             cleanup_enabled: false,
             cleanup_model: "qwen3.5-2b".to_owned(),
             theme: Theme::Dark,
+            auto_update: true,
         }
     }
 }

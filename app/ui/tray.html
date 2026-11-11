@@ -13,6 +13,13 @@
     .ready { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--color-neutral-200); font-size: 11.5px; font-weight: 600; }
     .ready i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
     .ready.busy { background: var(--color-accent-100); color: var(--color-accent-800); }
+    .update { margin: 0 8px 8px; padding: 10px 10px 10px 12px; border-radius: 12px; display: flex; align-items: center; gap: 10px;
+      background: var(--color-accent-100); color: var(--color-accent-800); }
+    .update svg { flex: none; }
+    .update .text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .update strong { font-size: 13px; }
+    .update span { font-size: 12px; }
+    .update .btn { padding: 6px 12px; font-size: 12.5px; }
     .keys { margin: 0 8px; padding: 8px; border-radius: 12px; display: flex; flex-direction: column; gap: 8px;
       background: var(--color-tray-keys); }
     .keys div { display: flex; align-items: center; gap: 6px; padding: 2px 4px; }
@@ -39,6 +46,12 @@
 <body>
   <div class="pop">
     <div class="head"><span class="wm">yap<i>.</i></span><span class="ready" id="status"><i></i><span id="status-text">Ready</span></span></div>
+    <!-- Only shown while an update is waiting. -->
+    <div class="update" id="update" role="status" hidden>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+      <span class="text"><strong id="update-title"></strong><span id="update-detail">Installs and restarts Yap.</span></span>
+      <button class="btn btn-primary" type="button" id="install-update">Install</button>
+    </div>
     <div class="keys">
       <div><span>Hold to talk</span><span id="hold"></span></div>
       <div><span>Toggle dictation</span><span id="toggle"></span></div>
@@ -70,11 +83,31 @@
       return wrap;
     }
 
+    // ---------- update ready ----------
+    // The backend reports a waiting update as `updateVersion` in tray_state
+    // (null when there is none) and with an `update-ready` event.
+    function showUpdate(version) {
+      $('update').hidden = !version;
+      if (version) $('update-title').textContent = `Yap ${version} is ready`;
+    }
+    $('install-update').onclick = async () => {
+      $('install-update').disabled = true;
+      $('update-detail').textContent = 'Installing…';
+      try {
+        await invoke('install_update');
+      } catch (error) {
+        $('update-detail').textContent = 'Installs and restarts Yap.';
+        $('error').textContent = String(error);
+        $('install-update').disabled = false;
+      }
+    };
+
     async function refresh() {
       try {
         const state = await invoke('tray_state');
         $('status-text').textContent = state.status;
         $('status').classList.toggle('busy', state.status !== 'Ready');
+        showUpdate(state.updateVersion);
         $('hold').replaceChildren(caps(state.holdKey));
         $('toggle').replaceChildren(caps(state.toggleKey));
         const list = $('engines');
@@ -107,6 +140,7 @@
     window.addEventListener('keydown', event => { if (event.key === 'Escape') window.__TAURI__.window.getCurrentWindow().hide(); });
     listen('tray-refresh', () => { $('error').textContent = ''; refresh(); });
     listen('settings-changed', refresh);
+    listen('update-ready', ({ payload }) => showUpdate(payload));
     refresh();
   </script>
 </body>
