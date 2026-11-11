@@ -141,9 +141,16 @@ textarea.input { min-height: 90px; resize: vertical; }
 .radio input:checked + .dot { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 4px var(--color-bg); }
 .radio input:focus-visible + .dot { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .seg { display: inline-flex; padding: 3px; gap: 3px; background: rgba(var(--rgb-text), .06); border-radius: var(--radius-md); }
-.seg-opt { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; border-radius: 7px; }
-.seg-opt:has(input:checked) { background: var(--color-bg); box-shadow: var(--shadow-sm); font-weight: 600; }
-.seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.seg-opt { position: relative; display: inline-flex; font-size: 13px; cursor: pointer; }
+.seg-opt span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 7px; }
+.seg-opt input:checked + span { background: var(--color-bg); box-shadow: var(--shadow-sm); font-weight: 600; }
+.seg-opt input:focus-visible + span { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+@supports not selector(:focus-visible) {
+  :focus { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .input:focus { border-color: var(--color-accent); outline: 3px solid rgba(var(--rgb-accent), .25); outline-offset: 0; }
+  .radio input:focus + .dot { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .seg-opt input:focus + span { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+}
 .switch { width: 38px; height: 22px; flex: none; padding: 2px; display: flex; justify-content: flex-start; align-items: center;
   border: 1.5px solid var(--color-divider); border-radius: 999px; background: transparent; }
 .switch span { width: 15px; height: 15px; border-radius: 50%; background: var(--color-neutral-400); }
@@ -268,9 +275,9 @@ textarea.input { min-height: 90px; resize: vertical; }
 .history-detail-head small { font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent-700); }
 .history-detail-head h1 { font-size: 20px; margin: 0; }
 .history-detail-head .btn-secondary { padding: 8px 10px; }
-.history-text { font-size: 17px; line-height: 1.6; margin: 0 0 28px; max-width: 560px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.history-text { font-size: 17px; line-height: 1.6; margin: 0 0 28px; max-width: 560px; word-break: break-word; overflow-wrap: anywhere; white-space: pre-wrap; }
 .history-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider); }
-.history-meta div { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 12px; overflow-wrap: anywhere; border-left: 1px solid var(--color-divider); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.history-meta div { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 12px; word-break: break-word; overflow-wrap: anywhere; border-left: 1px solid var(--color-divider); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .history-meta div:first-child { border-left: 0; padding-left: 0; }
 .history-meta small { text-transform: uppercase; letter-spacing: .1em; font-size: 10px; font-weight: 400; color: var(--color-neutral-600); }
 #message { padding: 6px 16px; font-size: 12px; }
@@ -302,7 +309,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .onboarding-content .row input[type='radio'] { accent-color: var(--color-accent); }
 .onboarding-content .row.choice { align-items: flex-start; gap: 14px; margin-bottom: 8px; padding: 14px 16px; border: 1.5px solid var(--color-divider); border-radius: 12px; }
 .onboarding-content .row.choice .dot { margin-top: 3px; }
-.onboarding-content .row.choice:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-100); }
+.onboarding-content .row.choice.selected { border-color: var(--color-accent); background: var(--color-accent-100); }
 .onboarding-content .btn { margin: 10px 8px 0 0; }
 .onboarding-content .row .btn, .onboarding-content .key-field .btn { margin: 0; }
 .onboarding-content footer { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--color-divider); padding: 14px 36px; }

@@ -209,6 +209,10 @@
       document.getElementById('local-setup').hidden = engine() !== 'local';
       document.getElementById('cloud-setup').hidden = engine() !== 'cloud';
       document.getElementById('remote-setup').hidden = engine() !== 'remote';
+      for (const choice of document.querySelectorAll('[name="engine"]')) {
+        choice.closest('.choice').classList.toggle('selected', choice.checked);
+      }
+
       status.textContent = '';
       // Put the cursor in the practice box so the first try just works.
       if (step === 4) setTimeout(() => document.getElementById('practice').focus(), 0);
