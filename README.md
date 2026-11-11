@@ -14,7 +14,7 @@ What you say can be private: messages, notes, work you can't share. So Yap leave
 - **Your own server.** Running Whisper on a box at home? Your audio stays on your network.
 - **A cloud provider, if you want one.** Use your own API key with a service you already trust. Yap only sends audio there when you've picked it.
 
-Either way, Yap only listens while you're dictating, and it doesn't keep recordings. Your dictation history only covers today and stays on your computer, and API keys live in Windows Credential Manager, not in a settings file.
+Either way, Yap only listens while you're dictating, and it doesn't keep recordings. Your dictation history only covers today and stays on your computer, and API keys live in Windows Credential Manager or the macOS Keychain, not in a settings file.
 
 And to be clear: I have no interest in tracking what you say. There's no analytics, no telemetry, no account. The only time Yap goes online is to download a model you asked for or to reach the cloud provider you picked. Your data is yours, and honestly, I don't want to hear about your bad ideas :)
 
@@ -67,18 +67,28 @@ Off by default. Download one of the clean-up models in Settings (Qwen3.5 2B at 1
 
 ## What you need
 
-- Windows 10 or 11 (64-bit)
+- Windows 10 or 11 (64-bit), or macOS 11.3 or later (Apple Silicon or Intel)
 - A microphone
 - For Whisper models, a processor with AVX2 (most Intel and AMD processors from 2013 on; some budget Pentium and Celeron chips don't have it).
 - For on-device models, some disk space for the model you pick. Parakeet and the smaller Whisper models run fine on a normal laptop CPU.
 
-Mac and Linux are on the way.
+Linux is on the way.
 
 ## Install
 
+### Windows
+
 Grab the latest `Yap_x.y.z_x64-setup.exe` from [Releases](https://github.com/codyrowland/yap/releases) and run it. It installs just for your user and adds Yap to the Start menu. If you're missing the Microsoft Visual C++ runtime, the installer adds it (Windows will ask for permission once).
 
-Yap isn't code-signed yet, so Windows might say "Windows protected your PC". Click **More info**, then **Run anyway**.
+The installer is signed, but Windows may still say "Windows protected your PC" while the certificate is new. Under **More info**, the publisher should read **Cody Rowland**; click **Run anyway**.
+
+### macOS
+
+Grab the latest `Yap_x.y.z_aarch64.dmg` (Apple Silicon) or `Yap_x.y.z_x64.dmg` (Intel) from [Releases](https://github.com/codyrowland/yap/releases), open it and drag Yap to **Applications**. Yap is signed and notarized by Apple.
+
+Yap needs the Accessibility permission to hear your talk keys and type into other apps. Turn Yap on in **System Settings › Privacy & Security › Accessibility**.
+
+### First run
 
 The first time you open it, a quick setup checks your mic, has you pick an engine and talk keys, and lets you try it out.
 
