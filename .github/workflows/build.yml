@@ -209,7 +209,8 @@ jobs:
           version=$(jq -r .version app/src-tauri/tauri.conf.json)
           base="https://github.com/codyrowland/yap/releases/download/v$version"
           entry() {
-            jq -n --arg url "$base/$1" --rawfile signature "artifacts/$1.sig" '{signature: $signature, url: $url}'
+            sig=$(find artifacts -name "$1.sig")
+            jq -n --arg url "$base/$1" --rawfile signature "$sig" '{signature: $signature, url: $url}'
           }
           jq -n --arg version "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson windows "$(entry "Yap_${version}_x64-setup.exe")" \
