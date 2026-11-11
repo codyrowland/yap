@@ -69,6 +69,7 @@ Off by default. Download one of the clean-up models in Settings (Qwen3.5 2B at 1
 
 - Windows 10 or 11 (64-bit)
 - A microphone
+- For Whisper models, a processor with AVX2 (most Intel and AMD processors from 2013 on; some budget Pentium and Celeron chips don't have it).
 - For on-device models, some disk space for the model you pick. Parakeet and the smaller Whisper models run fine on a normal laptop CPU.
 
 Mac and Linux are on the way.
