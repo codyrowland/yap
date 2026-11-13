@@ -91,6 +91,7 @@ pub struct Settings {
     pub cleanup_lists: bool,
     /// S1-mini only: lay out greetings and sign-offs as an email.
     pub cleanup_email: bool,
+    pub replacements: Vec<crate::replacements::Replacement>,
     pub theme: Theme,
     /// Download updates in the background and install them when Yap quits.
     pub auto_update: bool,
@@ -123,6 +124,7 @@ impl Default for Settings {
             cleanup_styling: crate::cleanup::Styling::SemiFormal,
             cleanup_lists: true,
             cleanup_email: false,
+            replacements: Vec::new(),
             theme: Theme::Dark,
             auto_update: true,
         }
@@ -225,6 +227,8 @@ impl Settings {
         if crate::cleanup::model(&self.cleanup_model).is_none() {
             return Err("Unknown clean-up model".to_owned());
         }
+
+        crate::replacements::validate(&self.replacements)?;
 
         let provider = cloud::provider(&self.cloud_provider).ok_or("Unknown cloud provider")?;
         for (id, model) in &self.cloud_models {
@@ -447,6 +451,10 @@ mod tests {
             insertion: Insertion::Type,
             language: "de".into(),
             show_overlay: false,
+            replacements: vec![crate::replacements::Replacement {
+                say: "my email".into(),
+                text: "cody@example.com".into(),
+            }],
             ..Settings::default()
         };
         settings

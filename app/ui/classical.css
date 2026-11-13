@@ -316,3 +316,19 @@ textarea.input { min-height: 90px; resize: vertical; }
 .onboarding-content footer #next { margin-left: auto; min-width: 140px; }
 .onboarding-content textarea { width: 100%; min-height: 150px; font-size: 15px; resize: none; }
 .onboarding-content #message { padding: 0; margin-top: 14px; }
+
+.repl-head { display: flex; align-items: flex-end; gap: 16px; margin: 36px 0 12px; }
+.repl-head > div { flex: 1; min-width: 0; }
+.repl-head p { font-size: 13px; margin: 0; max-width: 520px; }
+.repl-row { display: grid; grid-template-columns: 190px 1fr 132px; gap: 16px; align-items: start; padding: 12px 0; border-bottom: 1px solid var(--color-divider); }
+.repl-row.labels { padding: 10px 0 8px; font-size: 11px; font-weight: 600; color: var(--color-neutral-600); }
+.repl-row.form { background: rgba(var(--rgb-accent-100), .45); }
+.repl-row .say { font-size: 13.5px; font-weight: 600; padding-top: 2px; overflow-wrap: anywhere; }
+.repl-row .text { font-size: 13px; line-height: 1.45; white-space: pre-line; color: var(--color-neutral-700); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.repl-row .actions { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
+.repl-row .actions .btn-ghost { font-size: 12.5px; padding: 5px 8px; }
+.repl-row .stack { display: flex; flex-direction: column; gap: 6px; }
+.repl-row textarea.input { min-height: 64px; resize: vertical; }
+.repl-row .error { font-size: 12px; font-weight: 600; color: var(--color-accent-800); }
+.repl-empty { padding: 20px 0; margin: 0; font-size: 13px; color: var(--color-neutral-600); border-bottom: 1px solid var(--color-divider); }

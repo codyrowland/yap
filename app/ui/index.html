@@ -138,10 +138,10 @@
               <div class="what"><strong>Clean up dictations</strong><span id="cleanup-status">Adds a short pause after you stop talking.</span></div>
               <button type="button" class="switch" role="switch" id="cleanup-enabled" aria-label="Clean up dictations"><span></span></button>
             </div>
-            <div class="variants" id="cleanup-models" style="margin:0;border-top:0"></div>
+            <div id="cleanup-models"></div>
           </div>
-          <div id="s1-options" hidden>
-            <span class="kicker" style="display:block;margin:24px 0 6px">S1-mini options</span>
+          <div id="s1-options" style="margin:0 0 10px 28px" hidden>
+            <span class="kicker" style="display:block;margin:14px 0 6px">S1-mini options</span>
             <div class="rows">
               <div class="setting-row">
                 <div class="what"><strong>Style</strong><span>How formal S1-mini makes your words. Casual keeps everything lowercase; formal expands contractions.</span></div>
@@ -161,6 +161,19 @@
                 <button type="button" class="switch" role="switch" id="cleanup-email" aria-label="Email layout"><span></span></button>
               </div>
             </div>
+          </div>
+
+          <div class="repl-head" id="replacements">
+            <div>
+              <span class="kicker" style="display:block;margin-bottom:6px">Replacements</span>
+              <p class="muted">Say a phrase anywhere in a dictation and Yap swaps in your text. Capitalisation and punctuation around it don't matter. Replacements run after clean-up, so your text goes in exactly as written.</p>
+            </div>
+            <button type="button" class="btn btn-secondary" id="add-replacement">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add replacement</button>
+          </div>
+          <div style="border-top:1px solid var(--color-divider)">
+            <div class="repl-row labels"><span>When you say</span><span>Yap inserts</span><span></span></div>
+            <div id="replacement-list"></div>
           </div>
         </section>
 
@@ -252,7 +265,7 @@
     let settings = null;
     let catalog = null;
     let tab = 'talk';
-    let openFamilies = new Set(['parakeet', 'whisper']);
+    let openFamilies = new Set();
 
     // ---------- saving ----------
     let chain = Promise.resolve();
@@ -306,6 +319,7 @@
       renderFamilies();
       renderCloud();
       renderRemote();
+      renderReplacements();
     }
 
     // ---------- 2b talk keys ----------
@@ -357,21 +371,27 @@
     // ---------- 2f general ----------
     // ---------- clean-up ----------
     let cleanup = null;   // { models, status }
+    let cleanupOpen = false;
+    const s1Options = $('s1-options');
+    const toggleCleanup = () => { cleanupOpen = !cleanupOpen; renderCleanup(); };
     async function refreshCleanup() { cleanup = await invoke('cleanup_catalog'); }
     const CLEANUP_STATUS = { off: '', starting: 'Loading the model…', ready: 'Ready.' };
     function renderCleanup() {
       if (!cleanup) return;
       $('cleanup-enabled').setAttribute('aria-checked', String(settings.cleanupEnabled));
-      $('s1-options').hidden = settings.cleanupModel !== 's1-mini';
-      $('cleanup-styling').value = settings.cleanupStyling;
-      $('cleanup-lists').setAttribute('aria-checked', String(settings.cleanupLists));
-      $('cleanup-email').setAttribute('aria-checked', String(settings.cleanupEmail));
       const status = cleanup.status;
       $('cleanup-status').textContent = status.state === 'error' ? status.message
         : settings.cleanupEnabled ? (CLEANUP_STATUS[status.state] || '') + ' Adds a short pause after you stop talking.'
         : 'Adds a short pause after you stop talking. Download a model, then turn this on.';
-      const list = $('cleanup-models');
-      list.replaceChildren();
+      const ready = cleanup.models.filter(m => m.installed).length;
+      const loading = downloads.active && cleanup.models.some(m => `cleanup:${m.id}` === downloads.active.id);
+      const inUse = settings.cleanupEnabled && cleanup.models.some(m => m.id === settings.cleanupModel && m.installed);
+      const summary = loading ? 'Downloading…' : ready ? `${ready} of ${cleanup.models.length} downloaded` : `${cleanup.models.length} models`;
+      const family = familyRow('Clean-up models', null, cleanup.models.map(m => m.label).join(' · '), summary, inUse, cleanupOpen, toggleCleanup);
+      $('cleanup-models').replaceChildren(family);
+      if (!cleanupOpen) return;
+      const list = el('div', 'variants');
+      family.append(list);
       for (const model of cleanup.models) {
         const eventId = `cleanup:${model.id}`;
         const active = model.id === settings.cleanupModel;
@@ -416,12 +436,23 @@
         row.append(pick, title, el('span', 'size', formatBytes(model.downloadBytes || model.bytes)), actions);
         list.append(row);
       }
+      family.append(s1Options);
+      s1Options.hidden = settings.cleanupModel !== 's1-mini';
+      $('cleanup-styling').value = settings.cleanupStyling;
+      $('cleanup-lists').setAttribute('aria-checked', String(settings.cleanupLists));
+      $('cleanup-email').setAttribute('aria-checked', String(settings.cleanupEmail));
     }
     $('cleanup-enabled').onclick = async () => {
       const next = !settings.cleanupEnabled;
       if (next && !cleanup.models.some(m => m.id === settings.cleanupModel && m.installed)) {
         const installed = cleanup.models.find(m => m.installed);
-        if (!installed) { say('Download a clean-up model first.'); return; }
+        if (!installed) {
+          cleanupOpen = true;
+          renderCleanup();
+          say('Download a clean-up model first.');
+          return;
+        }
+
         await save({ cleanupEnabled: true, cleanupModel: installed.id });
       } else {
         await save({ cleanupEnabled: next });
@@ -501,6 +532,90 @@
       }
     };
 
+    let replEdit = null;
+    const replacements = () => settings.replacements || [];
+    const normalPhrase = phrase => (phrase.toLowerCase().match(/[\p{Alphabetic}\p{N}]+/gu) || []).join(' ');
+
+    function replacementForm() {
+      const row = el('div', 'repl-row form');
+      const say = el('input', 'input');
+      say.value = replEdit.say;
+      say.placeholder = 'e.g. my address';
+      say.maxLength = 100;
+      say.setAttribute('aria-label', 'When you say');
+      const stack = el('div', 'stack');
+      const text = el('textarea', 'input');
+      text.value = replEdit.text;
+      text.placeholder = 'The text Yap inserts. Line breaks are kept.';
+      text.maxLength = 10000;
+      text.setAttribute('aria-label', 'Yap inserts');
+      const error = el('span', 'error');
+      stack.append(text, error);
+      const buttons = el('div', 'stack');
+      const saveButton = el('button', 'btn btn-primary', 'Save');
+      saveButton.type = 'button';
+      const cancel = el('button', 'btn btn-secondary', 'Cancel');
+      cancel.type = 'button';
+      buttons.append(saveButton, cancel);
+      row.append(say, stack, buttons);
+
+      const check = () => {
+        replEdit.say = say.value;
+        replEdit.text = text.value;
+        const key = normalPhrase(say.value);
+        const dup = key && replacements().some((r, i) => i !== replEdit.index && normalPhrase(r.say) === key);
+        error.textContent = dup ? `You already have “${say.value.trim()}”.` : '';
+        error.hidden = !dup;
+        saveButton.disabled = !key || !text.value.trim() || !!dup;
+      };
+      say.oninput = check;
+      text.oninput = check;
+      check();
+      cancel.onclick = () => { replEdit = null; renderReplacements(true); };
+      saveButton.onclick = async () => {
+        const item = { say: say.value.trim().replace(/\s+/g, ' '), text: text.value.trim() };
+        const list = [...replacements()];
+        if (replEdit.index === -1) list.unshift(item); else list[replEdit.index] = item;
+        const editing = replEdit;
+        replEdit = null;
+        if (!await save({ replacements: list })) replEdit = editing;
+        renderReplacements(true);
+      };
+      setTimeout(() => (replEdit && replEdit.index === -1 ? say : text).focus(), 0);
+      return row;
+    }
+
+    function replacementRow(item, index) {
+      const row = el('div', 'repl-row');
+      row.append(el('span', 'say', `“${item.say}”`), el('span', 'text', item.text));
+      const actions = el('div', 'actions');
+      const edit = el('button', 'btn btn-ghost', 'Edit');
+      edit.type = 'button';
+      edit.disabled = !!replEdit;
+      edit.setAttribute('aria-label', `Edit “${item.say}”`);
+      edit.onclick = () => { replEdit = { index, say: item.say, text: item.text }; renderReplacements(true); };
+      const remove = el('button', 'btn btn-icon');
+      remove.type = 'button';
+      remove.disabled = !!replEdit;
+      remove.setAttribute('aria-label', `Delete “${item.say}”`);
+      remove.innerHTML = icon('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>');
+      remove.onclick = () => save({ replacements: replacements().filter((_, j) => j !== index) });
+      actions.append(edit, remove);
+      row.append(actions);
+      return row;
+    }
+
+    function renderReplacements(force = false) {
+      const list = $('replacement-list');
+      if (!force && replEdit && list.querySelector('.form')) return;
+      list.replaceChildren();
+      $('add-replacement').disabled = !!replEdit;
+      if (replEdit && replEdit.index === -1) list.append(replacementForm());
+      replacements().forEach((item, index) => list.append(replEdit && replEdit.index === index ? replacementForm() : replacementRow(item, index)));
+      if (!replacements().length && !replEdit) list.append(el('p', 'repl-empty', 'No replacements yet. Add one for text you type often: an address, a sign-off, a link.'));
+    }
+    $('add-replacement').onclick = () => { replEdit = { index: -1, say: '', text: '' }; renderReplacements(true); };
+
     // ---------- 2c on-device ----------
     // Families with a runtime in Yap, in display order, and the ones planned
     // next (shown as "Coming soon" until their runtime lands).
@@ -521,7 +636,7 @@
       head.innerHTML = onToggle ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square"><path d="m9 6 6 6-6 6"/></svg>` : '<span></span>';
       const title = el('span');
       const nameLine = el('span', 'name', name + ' ');
-      nameLine.append(el('span', null, '· ' + vendor));
+      if (vendor) nameLine.append(el('span', null, '· ' + vendor));
       title.append(nameLine, el('span', 'langs', langs));
       const summary = el('span', 'summary');
       if (inUse) summary.append(el('span', 'tag tag-accent', 'In use'));

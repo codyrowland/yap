@@ -4,6 +4,7 @@ pub mod credential_store;
 pub mod download;
 pub mod history;
 pub mod models;
+pub mod replacements;
 pub mod settings;
 pub mod speech;
 pub mod talk_keys;

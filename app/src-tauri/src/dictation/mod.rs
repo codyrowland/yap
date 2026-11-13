@@ -119,7 +119,7 @@ pub async fn stop_recording(
     expected: u64,
 ) -> Result<String, String> {
     let session = Arc::clone(session.inner());
-    let (id, capture, muted, cancelled, cleanup) = {
+    let (id, capture, muted, cancelled, cleanup, replacements) = {
         let mut session = lock(&session)?;
         let id = session
             .coordinator
@@ -133,8 +133,15 @@ pub async fn stop_recording(
             .cancel_flag(id)
             .ok_or("No recording is active")?;
         let capture = session.capture.take().ok_or("No recording is active")?;
-        let cleanup = app.state::<SharedSettings>().get().cleanup_enabled;
-        (id, capture, session.muted.take(), cancelled, cleanup)
+        let settings = app.state::<SharedSettings>().get();
+        (
+            id,
+            capture,
+            session.muted.take(),
+            cancelled,
+            settings.cleanup_enabled,
+            settings.replacements.clone(),
+        )
     };
     drop(muted);
     let recording = capture.stop();
@@ -205,6 +212,7 @@ pub async fn stop_recording(
         }
         other => other,
     };
+    let result = result.map(|text| yap_app::replacements::apply(&text, &replacements));
     let mut session = lock(&session)?;
     if !session.coordinator.is_active(id) {
         return Err("Cancelled".to_owned());
