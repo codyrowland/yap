@@ -63,7 +63,7 @@ If you run Whisper or another speech model on a home server or GPU box, drop its
 
 ## Clean-up
 
-Off by default. Download one of the clean-up models in Settings (Qwen3.5 2B at 1.3 GB, or Qwen3.5 4B at 2.7 GB) and flip it on. It runs entirely on your computer and only tidies up your words. It won't answer questions or add anything. If it ever fails or takes too long, Yap just inserts what you actually said.
+Off by default. Download one of the clean-up models in Settings and flip it on: S1-mini by Superwhisper (484 MB, English, the default), Utter dictation cleanup (1.4 GB, English and Hindi) or Dictation Cleanup Qwen3.5 4B (2.8 GB, English). With S1-mini you can also pick a style from casual to formal, and turn bulleted lists or email layout on or off. It runs entirely on your computer and only tidies up your words. It won't answer questions or add anything. If it ever fails or takes too long, Yap just inserts what you actually said.
 
 ## What you need
 

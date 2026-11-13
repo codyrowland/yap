@@ -103,9 +103,10 @@ fn spawn(model: &'static CleanupModel, models_dir: &Path) -> Result<Server, Stri
             "-t",
             &threads().to_string(),
             "--jinja",
-            // Clean-up needs no reasoning; end any "thinking" immediately.
-            "--reasoning-budget",
-            "0",
+            // The models were trained with thinking off. A reasoning budget
+            // of 0 suppresses it differently and degrades S1-mini's output.
+            "--chat-template-kwargs",
+            r#"{"enable_thinking":false}"#,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -232,16 +233,23 @@ pub fn sync(app: &AppHandle, settings: &Settings) {
 
 /// Cleans `text`, waiting up to 20 s for a server that is still loading.
 /// Errors leave it to the caller to insert the original text.
-pub fn clean(text: &str) -> Result<String, String> {
+pub fn clean(text: &str, style: cleanup::Style) -> Result<String, String> {
     let started = Instant::now();
-    let (port, key) = loop {
+    let (model_id, port, key) = loop {
         let ready = SERVER
             .lock()
             .map_err(|error| error.to_string())?
             .as_ref()
-            .map(|server| (server.ready, server.port, server.key.clone()));
+            .map(|server| {
+                (
+                    server.ready,
+                    server.model_id,
+                    server.port,
+                    server.key.clone(),
+                )
+            });
         match ready {
-            Some((true, port, key)) => break (port, key),
+            Some((true, model_id, port, key)) => break (model_id, port, key),
             Some((false, ..)) if started.elapsed() < Duration::from_secs(20) => {
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -251,5 +259,13 @@ pub fn clean(text: &str) -> Result<String, String> {
     };
     // Generation time grows with length; allow ~1 s per 40 words on top.
     let timeout = Duration::from_secs(15 + text.split_whitespace().count() as u64 / 40);
-    cleanup::clean(&format!("http://127.0.0.1:{port}"), &key, text, timeout)
+    let model = cleanup::model(model_id).ok_or("Unknown clean-up model")?;
+    cleanup::clean(
+        &format!("http://127.0.0.1:{port}"),
+        &key,
+        model,
+        style,
+        text,
+        timeout,
+    )
 }

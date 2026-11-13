@@ -140,6 +140,28 @@
             </div>
             <div class="variants" id="cleanup-models" style="margin:0;border-top:0"></div>
           </div>
+          <div id="s1-options" hidden>
+            <span class="kicker" style="display:block;margin:24px 0 6px">S1-mini options</span>
+            <div class="rows">
+              <div class="setting-row">
+                <div class="what"><strong>Style</strong><span>How formal S1-mini makes your words. Casual keeps everything lowercase; formal expands contractions.</span></div>
+                <div class="control"><select id="cleanup-styling" class="input">
+                  <option value="casual">Casual</option>
+                  <option value="semi-casual">Semi-casual</option>
+                  <option value="semi-formal">Semi-formal</option>
+                  <option value="formal">Formal</option>
+                </select></div>
+              </div>
+              <div class="setting-row">
+                <div class="what"><strong>Bulleted lists</strong><span>Turns three or more spoken items into a list.</span></div>
+                <button type="button" class="switch" role="switch" id="cleanup-lists" aria-label="Bulleted lists"><span></span></button>
+              </div>
+              <div class="setting-row">
+                <div class="what"><strong>Email layout</strong><span>Lays out every dictation as an email, with the greeting, body and sign-off on separate lines.</span></div>
+                <button type="button" class="switch" role="switch" id="cleanup-email" aria-label="Email layout"><span></span></button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- 2c · On-device -->
@@ -340,6 +362,10 @@
     function renderCleanup() {
       if (!cleanup) return;
       $('cleanup-enabled').setAttribute('aria-checked', String(settings.cleanupEnabled));
+      $('s1-options').hidden = settings.cleanupModel !== 's1-mini';
+      $('cleanup-styling').value = settings.cleanupStyling;
+      $('cleanup-lists').setAttribute('aria-checked', String(settings.cleanupLists));
+      $('cleanup-email').setAttribute('aria-checked', String(settings.cleanupEmail));
       const status = cleanup.status;
       $('cleanup-status').textContent = status.state === 'error' ? status.message
         : settings.cleanupEnabled ? (CLEANUP_STATUS[status.state] || '') + ' Adds a short pause after you stop talking.'
@@ -401,6 +427,10 @@
         await save({ cleanupEnabled: next });
       }
     };
+
+    $('cleanup-styling').onchange = event => save({ cleanupStyling: event.target.value });
+    $('cleanup-lists').onclick = () => save({ cleanupLists: !settings.cleanupLists });
+    $('cleanup-email').onclick = () => save({ cleanupEmail: !settings.cleanupEmail });
 
     function renderGeneral() {
       renderCleanup();

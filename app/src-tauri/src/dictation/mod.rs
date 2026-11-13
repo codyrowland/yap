@@ -97,10 +97,12 @@ pub fn begin_recording(
 async fn polish(app: &AppHandle, text: String, cancelled: &Arc<AtomicBool>) -> String {
     overlay::show(app, Overlay::Polishing);
     let original = text.clone();
-    let cleaned = tauri::async_runtime::spawn_blocking(move || crate::assistant::clean(&text))
-        .await
-        .map_err(|error| error.to_string())
-        .and_then(|result| result);
+    let style = app.state::<SharedSettings>().get().cleanup_style();
+    let cleaned =
+        tauri::async_runtime::spawn_blocking(move || crate::assistant::clean(&text, style))
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
     match cleaned {
         Ok(cleaned) if !cancelled.load(Ordering::Relaxed) => cleaned,
         Ok(_) => original,

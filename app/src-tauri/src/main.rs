@@ -148,6 +148,10 @@ fn main() {
             let (hold_key, toggle_key) = (settings.hold_key.clone(), settings.toggle_key.clone());
             dictation::preload(app.handle(), &settings);
             assistant::sync(app.handle(), &settings);
+            if let Ok(models_dir) = config::models_path(app.handle()) {
+                yap_app::cleanup::remove_retired(&models_dir);
+            }
+
             app.state::<SharedSettings>().set(settings);
             for window in app.config().app.windows.clone() {
                 tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?.build()?;

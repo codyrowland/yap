@@ -85,6 +85,12 @@ pub struct Settings {
     pub cleanup_enabled: bool,
     /// Which clean-up model (`cleanup::MODELS`).
     pub cleanup_model: String,
+    /// S1-mini only.
+    pub cleanup_styling: crate::cleanup::Styling,
+    /// S1-mini only: allow bulleted lists.
+    pub cleanup_lists: bool,
+    /// S1-mini only: lay out greetings and sign-offs as an email.
+    pub cleanup_email: bool,
     pub theme: Theme,
     /// Download updates in the background and install them when Yap quits.
     pub auto_update: bool,
@@ -113,7 +119,10 @@ impl Default for Settings {
             open_at_login: false,
             mute_while_recording: true,
             cleanup_enabled: false,
-            cleanup_model: "qwen3.5-2b".to_owned(),
+            cleanup_model: crate::cleanup::DEFAULT_MODEL.to_owned(),
+            cleanup_styling: crate::cleanup::Styling::SemiFormal,
+            cleanup_lists: true,
+            cleanup_email: false,
             theme: Theme::Dark,
             auto_update: true,
         }
@@ -198,6 +207,14 @@ impl Settings {
         }
     }
 
+    pub fn cleanup_style(&self) -> crate::cleanup::Style {
+        crate::cleanup::Style {
+            styling: self.cleanup_styling,
+            lists: self.cleanup_lists,
+            email: self.cleanup_email,
+        }
+    }
+
     /// Checks values that do not depend on the platform. Talk-key syntax is
     /// validated by `talk_keys`, with the platform's reserved shortcuts.
     pub fn validate(&self) -> Result<(), String> {
@@ -261,6 +278,13 @@ impl Settings {
 
         if settings.version < 7 {
             settings.migrate_talk_keys();
+        }
+
+        // Clean-up models that were retired: switch to the default and turn
+        // clean-up off until it is downloaded.
+        if crate::cleanup::model(&settings.cleanup_model).is_none() {
+            settings.cleanup_model = crate::cleanup::DEFAULT_MODEL.to_owned();
+            settings.cleanup_enabled = false;
         }
         settings.version = CURRENT_VERSION;
         settings.validate()?;
@@ -444,7 +468,15 @@ mod tests {
         assert!(!settings.minimal_overlay);
         assert!(settings.mute_while_recording);
         assert!(!settings.cleanup_enabled);
-        assert_eq!(settings.cleanup_model, "qwen3.5-2b");
+        assert_eq!(settings.cleanup_model, "s1-mini");
+        assert_eq!(
+            settings.cleanup_style(),
+            crate::cleanup::Style {
+                styling: crate::cleanup::Styling::SemiFormal,
+                lists: true,
+                email: false,
+            }
+        );
         assert_eq!(settings.theme, Theme::Dark);
     }
 
@@ -471,7 +503,27 @@ mod tests {
         assert!(Settings::from_json(r#"{"language":"xx"}"#).is_err());
         assert!(Settings::from_json(r#"{"engine":"remote"}"#).is_err());
         assert!(Settings::from_json(r#"{"remoteEndpoint":"file:///etc"}"#).is_err());
-        assert!(Settings::from_json(r#"{"cleanupModel":"gpt-9"}"#).is_err());
+        assert!(Settings::from_json(r#"{"cleanupStyling":"loud"}"#).is_err());
+        let settings = Settings {
+            cleanup_model: "gpt-9".to_owned(),
+            ..Settings::default()
+        };
+        assert!(settings.to_json().is_err());
+    }
+
+    #[test]
+    fn retired_cleanup_models_move_to_the_default_and_turn_off() {
+        let settings =
+            Settings::from_json(r#"{"cleanupEnabled":true,"cleanupModel":"qwen3.5-2b"}"#).unwrap();
+        assert_eq!(settings.cleanup_model, "s1-mini");
+        assert!(!settings.cleanup_enabled);
+        let settings = Settings::from_json(
+            r#"{"cleanupEnabled":true,"cleanupModel":"utter-qwen3-1.7b","cleanupStyling":"formal"}"#,
+        )
+        .unwrap();
+        assert!(settings.cleanup_enabled);
+        assert_eq!(settings.cleanup_model, "utter-qwen3-1.7b");
+        assert_eq!(settings.cleanup_styling, crate::cleanup::Styling::Formal);
     }
 
     #[test]
