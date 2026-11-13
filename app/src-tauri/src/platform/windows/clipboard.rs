@@ -1,17 +1,19 @@
 //! Paste-based insertion: put the transcript on the clipboard, press Ctrl+V,
 //! then put back what the user had copied.
 //!
-//! Only text can be restored. When the clipboard holds something else (an
-//! image, files), pasting would destroy it, so callers fall back to typing.
+//! Everything stored as memory blocks is restored (text, images, files, HTML).
+//! Formats held as GDI handles (bitmap, metafile, palette) are skipped;
+//! Windows rebuilds the bitmap from the saved DIB. When nothing on the
+//! clipboard can be restored, callers fall back to typing.
 
 use std::mem::size_of;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{GlobalFree, HANDLE};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
     GetClipboardFormatNameW, GetClipboardOwner, GetClipboardSequenceNumber, GetOpenClipboardWindow,
-    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
@@ -28,31 +30,45 @@ const VK_V: VIRTUAL_KEY = 0x56;
 const VK_Z: VIRTUAL_KEY = 0x5A;
 /// How long the target app gets to read the clipboard before it is restored.
 const PASTE_SETTLE: Duration = Duration::from_millis(250);
+const OPEN_TIMEOUT: Duration = Duration::from_secs(1);
+const OPEN_RETRY: Duration = Duration::from_millis(10);
 
-/// What was on the clipboard before Yap replaced it.
-enum Saved {
-    Empty,
-    Text(Vec<u16>),
+struct Format {
+    id: u32,
+    data: Vec<u8>,
 }
 
 struct Open;
 
 impl Open {
     fn new() -> Option<Self> {
-        // Another app may hold the clipboard briefly; retry for ~100 ms.
-        for _ in 0..10 {
+        let deadline = Instant::now() + OPEN_TIMEOUT;
+        loop {
             if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
                 return Some(Self);
             }
-            std::thread::sleep(Duration::from_millis(10));
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(OPEN_RETRY);
         }
-        None
     }
 }
 
 impl Drop for Open {
     fn drop(&mut self) {
         unsafe { CloseClipboard() };
+    }
+}
+
+fn text_format(text: &str) -> Format {
+    Format {
+        id: CF_UNICODETEXT as u32,
+        data: text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect(),
     }
 }
 
@@ -87,111 +103,118 @@ fn format_name(format: u32) -> String {
     }
 }
 
-fn describe_contents(_open: &Open) -> String {
+fn formats(_open: &Open) -> Vec<u32> {
     let mut formats = Vec::new();
     let mut format = 0;
     loop {
         format = unsafe { EnumClipboardFormats(format) };
-        if format == 0 || formats.len() == 12 {
-            break;
+        if format == 0 {
+            return formats;
         }
-        formats.push(format_name(format));
+        formats.push(format);
     }
+}
+
+fn describe_contents(open: &Open) -> String {
+    let names: Vec<String> = formats(open)
+        .into_iter()
+        .take(12)
+        .map(format_name)
+        .collect();
     let owner = window_process_name(unsafe { GetClipboardOwner() });
-    format!("copied by {owner}: {}", formats.join(", "))
+    format!("copied by {owner}: {}", names.join(", "))
 }
 
-/// Reads the clipboard if it is empty or plain text; otherwise says why it
-/// can't be put back.
-fn save(open: &Open) -> Result<Saved, String> {
+fn restorable(format: u32) -> bool {
+    !matches!(
+        format,
+        2 | 3 | 9 | 14 | 0x80 | 0x82 | 0x83 | 0x8E | 0x200..=0x3FF
+    )
+}
+
+fn read(_open: &Open, format: u32) -> Option<Vec<u8>> {
     unsafe {
-        if CountClipboardFormats() == 0 {
-            return Ok(Saved::Empty);
-        }
-        if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
-            return Err(format!(
-                "clipboard holds no text, {}",
-                describe_contents(open)
-            ));
+        let handle = GetClipboardData(format);
+        if handle.is_null() {
+            return None;
         }
 
-        let handle = GetClipboardData(CF_UNICODETEXT as u32);
-        if handle.is_null() {
-            return Err(format!(
-                "could not read the clipboard text, {}",
-                describe_contents(open)
-            ));
-        }
-        let pointer = GlobalLock(handle) as *const u16;
+        let pointer = GlobalLock(handle) as *const u8;
         if pointer.is_null() {
-            return Err(format!(
-                "could not lock the clipboard text, {}",
-                describe_contents(open)
-            ));
+            return None;
         }
-        let units = GlobalSize(handle) / size_of::<u16>();
-        let slice = std::slice::from_raw_parts(pointer, units);
-        let end = slice.iter().position(|unit| *unit == 0).unwrap_or(units);
-        let mut text = slice[..end].to_vec();
-        text.push(0);
+
+        let data = std::slice::from_raw_parts(pointer, GlobalSize(handle)).to_vec();
         GlobalUnlock(handle);
-        Ok(Saved::Text(text))
+        Some(data)
     }
 }
 
-/// Replaces the clipboard with `text` (NUL-terminated UTF-16), marked so
-/// Windows clipboard history and cloud clipboard skip it.
-fn put(_open: &Open, text: &[u16]) -> bool {
-    unsafe {
-        if EmptyClipboard() == 0 {
-            return false;
-        }
+fn save(open: &Open) -> Result<Vec<Format>, String> {
+    let saved: Vec<Format> = formats(open)
+        .into_iter()
+        .filter(|format| restorable(*format))
+        .filter_map(|id| read(open, id).map(|data| Format { id, data }))
+        .collect();
+    if saved.is_empty() && unsafe { CountClipboardFormats() } > 0 {
+        return Err(format!(
+            "nothing on the clipboard can be restored, {}",
+            describe_contents(open)
+        ));
+    }
 
-        let bytes = std::mem::size_of_val(text);
-        let memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    Ok(saved)
+}
+
+fn set(id: u32, data: &[u8]) -> bool {
+    unsafe {
+        let memory = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1));
         if memory.is_null() {
             return false;
         }
-        let pointer = GlobalLock(memory) as *mut u16;
+
+        let pointer = GlobalLock(memory) as *mut u8;
         if pointer.is_null() {
             GlobalFree(memory);
             return false;
         }
-        std::ptr::copy_nonoverlapping(text.as_ptr(), pointer, text.len());
+
+        std::ptr::copy_nonoverlapping(data.as_ptr(), pointer, data.len());
         GlobalUnlock(memory);
-        if SetClipboardData(CF_UNICODETEXT as u32, memory as HANDLE).is_null() {
+        if SetClipboardData(id, memory as HANDLE).is_null() {
             GlobalFree(memory);
             return false;
         }
 
-        for (format, value) in [
-            ("ExcludeClipboardContentFromMonitorProcessing", None),
-            ("CanIncludeInClipboardHistory", Some(0_u32)),
-            ("CanUploadToCloudClipboard", Some(0_u32)),
-        ] {
-            let id = RegisterClipboardFormatW(wide(format).as_ptr());
-            if id == 0 {
-                continue;
-            }
-            let size = if value.is_some() { size_of::<u32>() } else { 1 };
-            let memory = GlobalAlloc(GMEM_MOVEABLE, size);
-            if memory.is_null() {
-                continue;
-            }
-            let pointer = GlobalLock(memory) as *mut u8;
-            if !pointer.is_null() {
-                match value {
-                    Some(value) => std::ptr::write_unaligned(pointer as *mut u32, value),
-                    None => *pointer = 0,
-                }
-                GlobalUnlock(memory);
-            }
-            if SetClipboardData(id, memory as HANDLE).is_null() {
-                GlobalFree(memory);
-            }
-        }
         true
     }
+}
+
+/// Replaces the clipboard with `formats`, marked so Windows clipboard history
+/// and cloud clipboard skip it. An empty list just clears the clipboard.
+fn put(_open: &Open, formats: &[Format]) -> bool {
+    if unsafe { EmptyClipboard() } == 0 {
+        return false;
+    }
+
+    if formats.is_empty() {
+        return true;
+    }
+
+    let stored = formats.iter().fold(true, |stored, format| {
+        set(format.id, &format.data) && stored
+    });
+    for (name, value) in [
+        ("ExcludeClipboardContentFromMonitorProcessing", &[0u8][..]),
+        ("CanIncludeInClipboardHistory", &[0u8; 4][..]),
+        ("CanUploadToCloudClipboard", &[0u8; 4][..]),
+    ] {
+        let id = unsafe { RegisterClipboardFormatW(wide(name).as_ptr()) };
+        if id != 0 {
+            set(id, value);
+        }
+    }
+    stored
 }
 
 fn key(code: VIRTUAL_KEY, up: bool) -> INPUT {
@@ -225,8 +248,8 @@ fn chord(letter: VIRTUAL_KEY) -> bool {
     }
 }
 
-/// Pastes `text` into the focused field and restores the previous clipboard
-/// text, unless the user copied something new in the meantime.
+/// Pastes `text` into the focused field and restores the previous clipboard,
+/// unless the user copied something new in the meantime.
 pub fn paste(text: &str) -> PasteResult {
     let Some(open) = Open::new() else {
         let holder = window_process_name(unsafe { GetOpenClipboardWindow() });
@@ -236,7 +259,7 @@ pub fn paste(text: &str) -> PasteResult {
         Ok(saved) => saved,
         Err(reason) => return PasteResult::Unavailable(reason),
     };
-    if !put(&open, &wide(text)) {
+    if !put(&open, &[text_format(text)]) {
         return PasteResult::Failed;
     }
     drop(open);
@@ -247,14 +270,7 @@ pub fn paste(text: &str) -> PasteResult {
     if unsafe { GetClipboardSequenceNumber() } == ours
         && let Some(open) = Open::new()
     {
-        match &saved {
-            Saved::Empty => unsafe {
-                EmptyClipboard();
-            },
-            Saved::Text(previous) => {
-                put(&open, previous);
-            }
-        }
+        put(&open, &saved);
     }
 
     if sent {

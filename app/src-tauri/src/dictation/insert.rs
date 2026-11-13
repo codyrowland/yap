@@ -216,7 +216,7 @@ fn field_watch_passed(verifier: &Mutex<FieldWatch>, id: u64) -> bool {
 }
 
 /// Inserts `text` with the configured method. Paste falls back to typing when
-/// the clipboard holds something Yap could not restore (an image, files).
+/// the clipboard stays busy or holds nothing Yap could restore.
 fn send_text(id: u64, text: &str, method: Insertion) -> bool {
     match method {
         Insertion::Type => platform::type_text(text),
