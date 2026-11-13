@@ -28,25 +28,7 @@ pub struct Destination {
 
 impl Destination {
     pub fn app_name(&self) -> String {
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.process);
-            if handle.is_null() {
-                return "Unknown app".to_owned();
-            }
-
-            let mut path = [0u16; 1024];
-            let mut len = path.len() as u32;
-            let found = QueryFullProcessImageNameW(handle, 0, path.as_mut_ptr(), &mut len) != 0;
-            CloseHandle(handle);
-            if !found {
-                return "Unknown app".to_owned();
-            }
-
-            std::path::Path::new(&String::from_utf16_lossy(&path[..len as usize]))
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Unknown app".to_owned())
-        }
+        process_name(self.process).unwrap_or_else(|| "Unknown app".to_owned())
     }
 
     pub fn safe_to_insert(&self, current: Option<&Destination>) -> bool {
@@ -60,6 +42,37 @@ impl Destination {
     pub(super) fn native_edit(&self) -> bool {
         self.class.eq_ignore_ascii_case("Edit") || self.class.eq_ignore_ascii_case("RichEditD2DPT")
     }
+}
+
+pub(super) fn process_name(process: u32) -> Option<String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process);
+        if handle.is_null() {
+            return None;
+        }
+
+        let mut path = [0u16; 1024];
+        let mut len = path.len() as u32;
+        let found = QueryFullProcessImageNameW(handle, 0, path.as_mut_ptr(), &mut len) != 0;
+        CloseHandle(handle);
+        if !found {
+            return None;
+        }
+
+        std::path::Path::new(&String::from_utf16_lossy(&path[..len as usize]))
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    }
+}
+
+pub(super) fn window_process_name(window: *mut std::ffi::c_void) -> String {
+    if window.is_null() {
+        return "no window".to_owned();
+    }
+
+    let mut process = 0;
+    unsafe { GetWindowThreadProcessId(window, &mut process) };
+    process_name(process).unwrap_or_else(|| format!("process {process}"))
 }
 
 pub fn accessibility_ready() -> bool {

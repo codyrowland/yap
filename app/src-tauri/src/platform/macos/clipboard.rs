@@ -66,7 +66,9 @@ pub fn paste(text: &str) -> PasteResult {
     autoreleasepool(|_| {
         let board = NSPasteboard::generalPasteboard();
         let Some(saved) = save(&board) else {
-            return PasteResult::Unavailable;
+            return PasteResult::Unavailable(
+                "the pasteboard holds something other than text".to_owned(),
+            );
         };
         if !put(&board, text) {
             return PasteResult::Failed;

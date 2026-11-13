@@ -164,7 +164,7 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
             .lock()
             .is_ok_and(|session| !session.coordinator.closed())
             && platform::still_focused(&target);
-        ready && send_text(&typed, method)
+        ready && send_text(id, &typed, method)
     })
     .await
     .unwrap_or(false);
@@ -217,13 +217,21 @@ fn field_watch_passed(verifier: &Mutex<FieldWatch>, id: u64) -> bool {
 
 /// Inserts `text` with the configured method. Paste falls back to typing when
 /// the clipboard holds something Yap could not restore (an image, files).
-fn send_text(text: &str, method: Insertion) -> bool {
+fn send_text(id: u64, text: &str, method: Insertion) -> bool {
     match method {
         Insertion::Type => platform::type_text(text),
         Insertion::Paste => match platform::paste(text) {
             PasteResult::Pasted => true,
-            PasteResult::Unavailable => platform::type_text(text),
-            PasteResult::Failed => false,
+            PasteResult::Unavailable(reason) => {
+                crate::logfile::write(&format!(
+                    "insert {id}: paste unavailable ({reason}); typing instead"
+                ));
+                platform::type_text(text)
+            }
+            PasteResult::Failed => {
+                crate::logfile::write(&format!("insert {id}: paste failed"));
+                false
+            }
         },
     }
 }

@@ -78,6 +78,17 @@ pub fn begin_recording(
             return Err(error);
         }
     };
+    let microphone = &capture.microphone;
+    let mismatch = match settings.microphone_name.as_deref() {
+        Some(expected) if expected != microphone.name => {
+            format!("; settings expect \"{expected}\"")
+        }
+        _ => String::new(),
+    };
+    crate::logfile::write(&format!(
+        "recording {id} started: \"{}\" ({}){mismatch}",
+        microphone.name, microphone.details
+    ));
     let tap = capture.tap();
     session.capture = Some(capture);
     if settings.mute_while_recording {
@@ -166,7 +177,10 @@ pub async fn stop_recording(
         };
         let normalized = normalized.unwrap_or_default();
         let seconds = recording.samples.len() as f32 / recording.sample_rate.max(1) as f32;
-        crate::logfile::write(&format!("recording {id} stopped ({seconds:.1}s)"));
+        crate::logfile::write(&format!(
+            "recording {id} stopped ({seconds:.1}s, {})",
+            audio::describe_level(&normalized)
+        ));
         if !audio::meaningful_audio(&normalized) {
             crate::logfile::write(&format!("recording {id}: no meaningful audio"));
             session.coordinator.release(id, None, Instant::now());

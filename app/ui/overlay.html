@@ -50,6 +50,9 @@
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
     const $ = id => document.getElementById(id);
+    const report = message => invoke('overlay_log', { message: String(message) }).catch(() => {});
+    window.addEventListener('error', event => report(`error: ${event.message} (${event.filename}:${event.lineno})`));
+    window.addEventListener('unhandledrejection', event => report(`unhandled rejection: ${event.reason}`));
     const BARS = 20;
     const levels = new Array(BARS).fill(0);
     for (let i = 0; i < BARS; i++) $('wave').append(document.createElement('span'));
@@ -145,9 +148,14 @@
       levels.push(Math.min(1, Math.sqrt(payload * 8)));
       $('wave').childNodes.forEach((bar, i) => { bar.style.height = `${4 + levels[i] * 28}px`; });
     });
+    listen('overlay-draw-check', ({ payload }) => {
+      invoke('overlay_drawn', { check: payload, stage: 'received', visibility: document.visibilityState }).catch(() => {});
+      requestAnimationFrame(() => invoke('overlay_drawn', { check: payload, stage: 'drawn', visibility: document.visibilityState }).catch(() => {}));
+    });
     $('stop').onclick = () => invoke('overlay_stop').catch(() => {});
     $('undo').onclick = () => invoke('overlay_undo').catch(() => {});
     render({ state: 'hidden' });
+    report(`loaded (${document.visibilityState})`);
   </script>
 </body>
 </html>

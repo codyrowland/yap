@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{GlobalFree, HANDLE};
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, CountClipboardFormats, EmptyClipboard, GetClipboardData,
-    GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
+    GetClipboardFormatNameW, GetClipboardOwner, GetClipboardSequenceNumber, GetOpenClipboardWindow,
+    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
@@ -21,6 +21,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
 };
 
+use super::input::window_process_name;
 use crate::platform::PasteResult;
 
 const VK_V: VIRTUAL_KEY = 0x56;
@@ -59,24 +60,74 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Reads the clipboard if it is empty or plain text; `None` when it holds
-/// anything Yap could not put back.
-fn save(_open: &Open) -> Option<Saved> {
+fn format_name(format: u32) -> String {
+    let standard = match format {
+        1 => "text",
+        2 => "bitmap",
+        3 => "metafile",
+        7 => "OEM text",
+        8 => "DIB image",
+        13 => "unicode text",
+        14 => "enhanced metafile",
+        15 => "files",
+        16 => "locale",
+        17 => "DIBV5 image",
+        _ => "",
+    };
+    if !standard.is_empty() {
+        return standard.to_owned();
+    }
+
+    let mut name = [0u16; 128];
+    let len = unsafe { GetClipboardFormatNameW(format, name.as_mut_ptr(), name.len() as i32) };
+    if len > 0 {
+        String::from_utf16_lossy(&name[..len as usize])
+    } else {
+        format!("format {format}")
+    }
+}
+
+fn describe_contents(_open: &Open) -> String {
+    let mut formats = Vec::new();
+    let mut format = 0;
+    loop {
+        format = unsafe { EnumClipboardFormats(format) };
+        if format == 0 || formats.len() == 12 {
+            break;
+        }
+        formats.push(format_name(format));
+    }
+    let owner = window_process_name(unsafe { GetClipboardOwner() });
+    format!("copied by {owner}: {}", formats.join(", "))
+}
+
+/// Reads the clipboard if it is empty or plain text; otherwise says why it
+/// can't be put back.
+fn save(open: &Open) -> Result<Saved, String> {
     unsafe {
         if CountClipboardFormats() == 0 {
-            return Some(Saved::Empty);
+            return Ok(Saved::Empty);
         }
         if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
-            return None;
+            return Err(format!(
+                "clipboard holds no text, {}",
+                describe_contents(open)
+            ));
         }
 
         let handle = GetClipboardData(CF_UNICODETEXT as u32);
         if handle.is_null() {
-            return None;
+            return Err(format!(
+                "could not read the clipboard text, {}",
+                describe_contents(open)
+            ));
         }
         let pointer = GlobalLock(handle) as *const u16;
         if pointer.is_null() {
-            return None;
+            return Err(format!(
+                "could not lock the clipboard text, {}",
+                describe_contents(open)
+            ));
         }
         let units = GlobalSize(handle) / size_of::<u16>();
         let slice = std::slice::from_raw_parts(pointer, units);
@@ -84,7 +135,7 @@ fn save(_open: &Open) -> Option<Saved> {
         let mut text = slice[..end].to_vec();
         text.push(0);
         GlobalUnlock(handle);
-        Some(Saved::Text(text))
+        Ok(Saved::Text(text))
     }
 }
 
@@ -178,10 +229,12 @@ fn chord(letter: VIRTUAL_KEY) -> bool {
 /// text, unless the user copied something new in the meantime.
 pub fn paste(text: &str) -> PasteResult {
     let Some(open) = Open::new() else {
-        return PasteResult::Unavailable;
+        let holder = window_process_name(unsafe { GetOpenClipboardWindow() });
+        return PasteResult::Unavailable(format!("clipboard busy, held open by {holder}"));
     };
-    let Some(saved) = save(&open) else {
-        return PasteResult::Unavailable;
+    let saved = match save(&open) {
+        Ok(saved) => saved,
+        Err(reason) => return PasteResult::Unavailable(reason),
     };
     if !put(&open, &wide(text)) {
         return PasteResult::Failed;

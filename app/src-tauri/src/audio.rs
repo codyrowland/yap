@@ -46,6 +46,19 @@ impl Recording {
     }
 }
 
+pub fn describe_level(samples: &[f32]) -> String {
+    if samples.is_empty() {
+        return "no samples".to_owned();
+    }
+
+    let rms =
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
+    let peak = samples
+        .iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    format!("rms {rms:.4}, peak {peak:.4}")
+}
+
 pub fn meaningful_audio(samples: &[f32]) -> bool {
     samples.len() >= 1_600
         && samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32
@@ -118,9 +131,21 @@ impl Drop for Running {
     }
 }
 
-type Opened = (Stream, Arc<Mutex<AudioBuffer>>, mpsc::Receiver<String>, u32);
+type Opened = (
+    Stream,
+    Arc<Mutex<AudioBuffer>>,
+    mpsc::Receiver<String>,
+    u32,
+    MicrophoneInfo,
+);
+
+pub struct MicrophoneInfo {
+    pub name: String,
+    pub details: String,
+}
 
 pub struct Capture {
+    pub microphone: MicrophoneInfo,
     stream: Option<Running>,
     buffer: Arc<Mutex<AudioBuffer>>,
     errors: mpsc::Receiver<String>,
@@ -191,6 +216,10 @@ impl Capture {
         };
         buffer.append(samples, |sample| sample);
         Self {
+            microphone: MicrophoneInfo {
+                name: "prerecorded".to_owned(),
+                details: String::new(),
+            },
             stream: None,
             buffer: Arc::new(Mutex::new(buffer)),
             errors,
@@ -202,8 +231,8 @@ impl Capture {
         let (ready, opened) = mpsc::channel();
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = std::thread::spawn(move || match Self::open(index) {
-            Ok((stream, buffer, errors, sample_rate)) => {
-                let _ = ready.send(Ok((buffer, errors, sample_rate)));
+            Ok((stream, buffer, errors, sample_rate, microphone)) => {
+                let _ = ready.send(Ok((buffer, errors, sample_rate, microphone)));
                 let _ = stopped.recv();
                 drop(stream);
             }
@@ -211,10 +240,11 @@ impl Capture {
                 let _ = ready.send(Err(error));
             }
         });
-        let (buffer, errors, sample_rate) = opened
+        let (buffer, errors, sample_rate, microphone) = opened
             .recv()
             .map_err(|_| "Microphone stopped unexpectedly".to_owned())??;
         Ok(Self {
+            microphone,
             stream: Some(Running {
                 stop,
                 thread: Some(thread),
@@ -226,15 +256,27 @@ impl Capture {
     }
 
     fn open(index: usize) -> Result<Opened, String> {
-        let device = cpal::default_host()
+        let devices: Vec<cpal::Device> = cpal::default_host()
             .input_devices()
             .map_err(|error| error.to_string())?
-            .nth(index)
-            .ok_or_else(|| "Microphone is no longer available".to_owned())?;
+            .collect();
+        let count = devices.len();
+        let device = devices.into_iter().nth(index).ok_or_else(|| {
+            format!("Microphone is no longer available (index {index} of {count})")
+        })?;
         let supported = device
             .default_input_config()
             .map_err(|error| error.to_string())?;
         let config: StreamConfig = supported.config();
+        let microphone = MicrophoneInfo {
+            name: device.name().unwrap_or_else(|_| "unknown".to_owned()),
+            details: format!(
+                "index {index} of {count}, {} Hz, {} ch, {:?}",
+                config.sample_rate.0,
+                config.channels,
+                supported.sample_format()
+            ),
+        };
         if config.channels == 0 || config.sample_rate.0 == 0 || config.sample_rate.0 > 192_000 {
             return Err("Unsupported microphone format".to_owned());
         }
@@ -264,7 +306,13 @@ impl Capture {
             _ => return Err("Unsupported microphone sample format".to_owned()),
         }?;
         stream.play().map_err(|error| error.to_string())?;
-        Ok((stream, buffer, error_receiver, config.sample_rate.0))
+        Ok((
+            stream,
+            buffer,
+            error_receiver,
+            config.sample_rate.0,
+            microphone,
+        ))
     }
 
     pub fn tap(&self) -> Tap {

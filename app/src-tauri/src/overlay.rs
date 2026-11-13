@@ -1,6 +1,8 @@
 //! The recording overlay (design 2h): a bar near the bottom of the screen
 //! showing recording, transcribing, inserted and error states.
 
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -15,6 +17,15 @@ const HEIGHT: f64 = 56.0;
 const BOTTOM_MARGIN: f64 = 72.0;
 /// How long the "Inserted" state stays up (and Undo stays available).
 pub const DONE_VISIBLE: Duration = Duration::from_secs(4);
+const DRAW_TIMEOUT: Duration = Duration::from_secs(1);
+
+static DRAW_CHECKS: AtomicU64 = AtomicU64::new(0);
+static RECEIVED: AtomicU64 = AtomicU64::new(0);
+static DRAWN: AtomicU64 = AtomicU64::new(0);
+static HIDDEN_AFTER: AtomicU64 = AtomicU64::new(0);
+static NOT_DRAWING: AtomicBool = AtomicBool::new(false);
+static MONITORS: Mutex<String> = Mutex::new(String::new());
+static PAGE_VISIBILITY: Mutex<String> = Mutex::new(String::new());
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -63,6 +74,11 @@ fn place(app: &AppHandle) {
         .ok()
         .and_then(|cursor| app.monitor_from_point(cursor.x, cursor.y).ok().flatten())
         .or_else(|| app.primary_monitor().ok().flatten());
+    log_monitor_changes(app);
+    if monitor.is_none() {
+        crate::logfile::write("overlay: no monitor found to place it on");
+    }
+
     if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
         let area = monitor.work_area();
@@ -82,6 +98,7 @@ pub fn show(app: &AppHandle, state: Overlay) {
     );
     if matches!(state, Overlay::Hidden) || !enabled(app) || (hidden_when_minimal && minimal(app)) {
         platform::set_visible_without_focus(&window, false);
+        HIDDEN_AFTER.store(DRAW_CHECKS.load(Ordering::Relaxed), Ordering::Relaxed);
         let _ = app.emit_to(LABEL, "overlay-state", Overlay::Hidden);
         return;
     }
@@ -91,6 +108,134 @@ pub fn show(app: &AppHandle, state: Overlay) {
     }
     let _ = app.emit_to(LABEL, "overlay-state", &state);
     platform::set_visible_without_focus(&window, true);
+    check_drawn(app, state_name(&state));
+}
+
+fn state_name(state: &Overlay) -> &'static str {
+    match state {
+        Overlay::Recording { .. } => "recording",
+        Overlay::Transcribing { .. } => "transcribing",
+        Overlay::Polishing => "polishing",
+        Overlay::Done { .. } => "done",
+        Overlay::Error { .. } => "error",
+        Overlay::Hidden => "hidden",
+    }
+}
+
+fn describe_monitors(app: &AppHandle) -> String {
+    app.available_monitors()
+        .map(|monitors| {
+            monitors
+                .iter()
+                .map(|monitor| {
+                    let position = monitor.position();
+                    let size = monitor.size();
+                    format!(
+                        "{} {}x{} at {},{} scale {}",
+                        monitor.name().map_or("unnamed", |name| name.as_str()),
+                        size.width,
+                        size.height,
+                        position.x,
+                        position.y,
+                        monitor.scale_factor()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_else(|error| format!("unknown ({error})"))
+}
+
+fn log_monitor_changes(app: &AppHandle) {
+    let monitors = describe_monitors(app);
+    let Ok(mut last) = MONITORS.lock() else {
+        return;
+    };
+    if *last != monitors {
+        crate::logfile::write(&format!("monitors: {monitors}"));
+        *last = monitors;
+    }
+}
+
+fn describe_window(window: &tauri::WebviewWindow) -> String {
+    let position = window.outer_position().map_or_else(
+        |error| format!("unknown ({error})"),
+        |p| format!("{},{}", p.x, p.y),
+    );
+    let size = window.outer_size().map_or_else(
+        |error| format!("unknown ({error})"),
+        |s| format!("{}x{}", s.width, s.height),
+    );
+    let monitor = match window.current_monitor() {
+        Ok(Some(monitor)) => monitor
+            .name()
+            .cloned()
+            .unwrap_or_else(|| "unnamed".to_owned()),
+        Ok(None) => "none (off-screen?)".to_owned(),
+        Err(error) => format!("unknown ({error})"),
+    };
+    format!(
+        "visible={:?} minimized={:?} on_top={:?} position={position} size={size} monitor={monitor}",
+        window.is_visible().ok(),
+        window.is_minimized().ok(),
+        window.is_always_on_top().ok(),
+    )
+}
+
+fn check_drawn(app: &AppHandle, state: &'static str) {
+    let check = DRAW_CHECKS.fetch_add(1, Ordering::Relaxed) + 1;
+    let _ = app.emit_to(LABEL, "overlay-draw-check", check);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(DRAW_TIMEOUT);
+        if DRAWN.load(Ordering::Relaxed) >= check || HIDDEN_AFTER.load(Ordering::Relaxed) >= check {
+            return;
+        }
+
+        NOT_DRAWING.store(true, Ordering::Relaxed);
+        let received = if RECEIVED.load(Ordering::Relaxed) >= check {
+            PAGE_VISIBILITY.lock().map_or_else(
+                |_| "yes".to_owned(),
+                |visibility| format!("yes, page {visibility}"),
+            )
+        } else {
+            "no".to_owned()
+        };
+        let window = app.get_webview_window(LABEL).map_or_else(
+            || "window missing".to_owned(),
+            |window| describe_window(&window),
+        );
+        crate::logfile::write(&format!(
+            "overlay did not draw within {} ms (check {check}, state {state}): page received the check: {received}; {window}; monitors: {}",
+            DRAW_TIMEOUT.as_millis(),
+            describe_monitors(&app)
+        ));
+    });
+}
+
+#[tauri::command]
+pub fn overlay_drawn(check: u64, stage: String, visibility: String) {
+    if stage == "received" {
+        if let Ok(mut last) = PAGE_VISIBILITY.lock() {
+            *last = visibility;
+        }
+
+        RECEIVED.fetch_max(check, Ordering::Relaxed);
+        return;
+    }
+
+    DRAWN.fetch_max(check, Ordering::Relaxed);
+    if NOT_DRAWING.swap(false, Ordering::Relaxed) {
+        crate::logfile::write(&format!(
+            "overlay is drawing again (check {check}, page {visibility})"
+        ));
+    }
+}
+
+#[tauri::command]
+pub fn overlay_log(message: String) {
+    let message: String = message.chars().take(500).collect();
+    crate::logfile::write(&format!("overlay page: {message}"));
 }
 
 /// The overlay must never keep focus. Even shown with `SW_SHOWNOACTIVATE`

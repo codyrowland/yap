@@ -28,7 +28,7 @@ pub struct WindowId(isize);
 pub enum PasteResult {
     Pasted,
     /// The clipboard held something that cannot be restored; nothing was sent.
-    Unavailable,
+    Unavailable(String),
     Failed,
 }
 

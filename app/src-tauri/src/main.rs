@@ -78,6 +78,28 @@ fn start_history_expiry(handle: AppHandle) {
     });
 }
 
+fn watch_for_sleep() {
+    const TICK: std::time::Duration = std::time::Duration::from_secs(10);
+    const GAP: std::time::Duration = std::time::Duration::from_secs(60);
+    std::thread::spawn(|| {
+        let mut last = std::time::SystemTime::now();
+        loop {
+            std::thread::sleep(TICK);
+            let now = std::time::SystemTime::now();
+            if let Ok(elapsed) = now.duration_since(last)
+                && elapsed > GAP
+            {
+                logfile::write(&format!(
+                    "resumed after {} s without running (sleep or hibernate)",
+                    elapsed.as_secs()
+                ));
+            }
+
+            last = now;
+        }
+    });
+}
+
 fn main() {
     tauri::Builder::default()
         // tao registers raw keyboard/mouse input on our windows by default.
@@ -124,6 +146,8 @@ fn main() {
             onboarding::complete_onboarding,
             overlay::overlay_stop,
             overlay::overlay_undo,
+            overlay::overlay_drawn,
+            overlay::overlay_log,
             own_window::own_window_reply,
         ])
         .setup(|app| {
@@ -138,6 +162,17 @@ fn main() {
             commands::update::start_auto_update(app.handle().clone());
 
             let settings = config::load(app.handle()).map_err(std::io::Error::other)?;
+            logfile::write(&format!(
+                "system: {} {}; webview {}; overlay shown={} minimal={}; microphone \"{}\" (index {})",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                tauri::webview_version().unwrap_or_else(|error| format!("unknown ({error})")),
+                settings.show_overlay,
+                settings.minimal_overlay,
+                settings.microphone_name.as_deref().unwrap_or("none saved"),
+                settings.microphone_index
+            ));
+            watch_for_sleep();
             let microphone: audio::MicrophoneState = Box::new(audio::SystemMicrophone);
             let engines = dictation::Engines::system();
             #[cfg(all(debug_assertions, feature = "input-test"))]
