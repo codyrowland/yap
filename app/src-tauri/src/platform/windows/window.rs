@@ -1,7 +1,7 @@
 use tauri::WebviewWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow,
+    GetForegroundWindow, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos, ShowWindow,
 };
 
 /// Shows or hides a window without ever activating it.
@@ -23,12 +23,12 @@ pub fn set_visible_without_focus(window: &WebviewWindow, visible: bool) {
         if visible {
             SetWindowPos(
                 hwnd.0,
-                std::ptr::null_mut(),
+                HWND_TOPMOST,
                 0,
                 0,
                 0,
                 0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
         }
 
