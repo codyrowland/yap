@@ -92,7 +92,7 @@ async fn insert_own(app: &AppHandle, id: u64) -> Option<Result<Inserted, String>
     };
 
     let handle = app.clone();
-    let sent = text.clone();
+    let sent = format!("{text} ");
     let result =
         tauri::async_runtime::spawn_blocking(move || own_window::insert(&handle, id, &sent))
             .await
@@ -158,7 +158,7 @@ async fn insert_external(app: &AppHandle, id: u64) -> Option<Result<Inserted, St
 
     let state = Arc::clone(&session_state);
     let target = destination.clone();
-    let typed = text.clone();
+    let typed = format!("{text} ");
     let submitted = tauri::async_runtime::spawn_blocking(move || {
         let ready = state
             .lock()
